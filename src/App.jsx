@@ -60,7 +60,7 @@ export default function App() {
           <Route path="/" element={<><Dashboard session={session} /><Footer /></>} />
           <Route path="/nutritie" element={<><Nutritie session={session} isAdmin={isAdmin} /><Footer /></>} />
           <Route path="/sport" element={<><Sport session={session} /><Footer /></>} />
-          <Route path="/profil" element={<><Profil session={session} /><Footer /></>} />
+          <Route path="/profil" element={<><Profil session={session} isAdmin={isAdmin} /><Footer /></>} />
         </Routes>
       </div>
     </BrowserRouter>

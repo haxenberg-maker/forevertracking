@@ -126,7 +126,7 @@ function MacroSlider({ label, emoji, color, value, onChange, min = 10, max = 70 
   )
 }
 
-export default function Profil({ session }) {
+export default function Profil({ session, isAdmin }) {
   const [weights, setWeights] = useState([])
   const [profile, setProfile] = useState({ gender: 'male', age: 25, height_cm: 170, activity_level: 'moderate', goal: 'maintain' })
   const [showWeightModal, setShowWeightModal] = useState(false)
@@ -244,7 +244,13 @@ export default function Profil({ session }) {
         </div>
         <div>
           <p className="font-semibold text-white text-sm">{session.user.email}</p>
-          <p className="text-xs text-slate-400">Cont activ</p>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+              isAdmin ? 'bg-brand-orange/20 text-brand-orange' : 'bg-dark-700 text-slate-400'
+            }`}>
+              {isAdmin ? '⚡ Administrator' : '👤 Standard'}
+            </span>
+          </div>
         </div>
       </div>
 

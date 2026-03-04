@@ -558,7 +558,15 @@ function AlimenteTab({ session, isAdmin }) {
 
   async function saveFood() {
     if (!form.name || !form.calories) return
-    const data = { user_id: session.user.id, name: form.name, calories: parseFloat(form.calories), protein: parseFloat(form.protein) || 0, carbs: parseFloat(form.carbs) || 0, fat: parseFloat(form.fat) || 0 }
+    const data = {
+      user_id: session.user.id,
+      user_email: session.user.email,
+      name: form.name,
+      calories: parseFloat(form.calories),
+      protein: parseFloat(form.protein) || 0,
+      carbs: parseFloat(form.carbs) || 0,
+      fat: parseFloat(form.fat) || 0,
+    }
     if (editFood) await supabase.from('foods').update(data).eq('id', editFood.id)
     else await supabase.from('foods').insert(data)
     setShowModal(false); loadFoods()
@@ -570,11 +578,11 @@ function AlimenteTab({ session, isAdmin }) {
 
   async function handleCSV(e) {
     const file = e.target.files[0]; if (!file) return
-    const rows = e.target.files[0] && await file.text().then(text =>
+    const rows = await file.text().then(text =>
       text.trim().split('\n').slice(1).map(line => {
         const [name, calories, protein, carbs, fat] = line.split(',').map(s => s.trim())
         if (!name || !calories) return null
-        return { user_id: session.user.id, name, calories: parseFloat(calories) || 0, protein: parseFloat(protein) || 0, carbs: parseFloat(carbs) || 0, fat: parseFloat(fat) || 0 }
+        return { user_id: session.user.id, user_email: session.user.email, name, calories: parseFloat(calories) || 0, protein: parseFloat(protein) || 0, carbs: parseFloat(carbs) || 0, fat: parseFloat(fat) || 0 }
       }).filter(Boolean)
     )
     if (rows?.length) await supabase.from('foods').insert(rows)
@@ -583,6 +591,8 @@ function AlimenteTab({ session, isAdmin }) {
   }
 
   const filteredFoods = foods.filter(f => f.name.toLowerCase().includes(search.toLowerCase()))
+  const canDelete = (f) => isAdmin || f.user_id === session.user.id
+  const canEdit = (f) => isAdmin || f.user_id === session.user.id
 
   return (
     <div className="space-y-3">
@@ -612,16 +622,18 @@ function AlimenteTab({ session, isAdmin }) {
           <div className="space-y-2">
             {filteredFoods.map(f => (
               <div key={f.id} className="card flex items-center justify-between">
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <p className="font-semibold text-sm text-white">{f.name}</p>
                   <p className="text-xs text-slate-400 mt-0.5">{f.calories} kcal · P:{f.protein}g · C:{f.carbs}g · G:{f.fat}g<span className="text-slate-600"> /100g</span></p>
                 </div>
-                {f.user_id === session.user.id && (
-                  <div className="flex gap-2 ml-3">
+                <div className="flex gap-2 ml-3 shrink-0">
+                  {canEdit(f) && (
                     <button onClick={() => openEdit(f)} className="text-xs bg-dark-700 text-slate-300 px-2.5 py-1.5 rounded-lg hover:bg-dark-600">✏️</button>
+                  )}
+                  {canDelete(f) && (
                     <button onClick={() => deleteFood(f.id)} className="text-xs bg-red-500/10 text-red-400 px-2.5 py-1.5 rounded-lg hover:bg-red-500/20">🗑</button>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -629,6 +641,12 @@ function AlimenteTab({ session, isAdmin }) {
 
       <Modal open={showModal} onClose={() => setShowModal(false)} title={editFood ? 'Editează aliment' : 'Aliment nou'}>
         <div className="space-y-3">
+          {isAdmin && editFood?.user_email && (
+            <div className="bg-dark-700 rounded-xl px-3 py-2 flex items-center gap-2">
+              <span className="text-xs text-slate-500">👤 Adăugat de:</span>
+              <span className="text-xs text-slate-300 font-medium">{editFood.user_email}</span>
+            </div>
+          )}
           {[
             { key: 'name', label: 'Nume aliment', placeholder: 'ex: Piept de pui', type: 'text' },
             { key: 'calories', label: 'Calorii (kcal / 100g)', placeholder: '0', type: 'number' },
