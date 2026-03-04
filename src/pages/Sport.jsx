@@ -406,88 +406,163 @@ function FortaTab({ session }) {
 
 function CalendarTab({ session }) {
   const today = getToday()
-  const [events, setEvents] = useState([])
   const [currentMonth, setCurrentMonth] = useState(new Date())
-  const [showModal, setShowModal] = useState(false)
-  const [selectedDate, setSelectedDate] = useState(today)
-  const [form, setForm] = useState({ name: '', type: 'strength' })
+  const [monthData, setMonthData] = useState({})
+  const [selectedDate, setSelectedDate] = useState(null)
+  const [dayDetail, setDayDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [showPlanModal, setShowPlanModal] = useState(false)
+  const [planDate, setPlanDate] = useState(today)
+  const [planForm, setPlanForm] = useState({ name: '', type: 'strength' })
 
-  useEffect(() => { loadEvents() }, [currentMonth])
+  useEffect(() => { loadMonthData() }, [currentMonth])
 
-  async function loadEvents() {
-    const start = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).toISOString().split('T')[0]
-    const end = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).toISOString().split('T')[0]
-    const { data: workouts } = await supabase.from('workout_logs').select('date, name, type').eq('user_id', session.user.id).gte('date', start).lte('date', end)
-    const { data: runs } = await supabase.from('running_logs').select('date, distance_km').eq('user_id', session.user.id).gte('date', start).lte('date', end)
+  async function loadMonthData() {
+    const year = currentMonth.getFullYear()
+    const month = currentMonth.getMonth()
+    const start = `${year}-${String(month+1).padStart(2,'0')}-01`
+    const end = new Date(year, month+1, 0).toISOString().split('T')[0]
+    const uid = session.user.id
 
-    const allEvents = {}
-    ;(workouts || []).forEach(w => {
-      if (!allEvents[w.date]) allEvents[w.date] = []
-      allEvents[w.date].push({ type: w.type, label: w.name })
+    const [
+      { data: workouts }, { data: runs }, { data: mealLogs },
+      { data: supLogs }, { data: targets }, { data: allSups },
+    ] = await Promise.all([
+      supabase.from('workout_logs').select('date, name, type').eq('user_id', uid).gte('date', start).lte('date', end),
+      supabase.from('running_logs').select('date, distance_km').eq('user_id', uid).gte('date', start).lte('date', end),
+      supabase.from('meal_logs').select('date, meal_items(quantity_g, foods(calories))').eq('user_id', uid).gte('date', start).lte('date', end),
+      supabase.from('supplement_logs').select('date, taken').eq('user_id', uid).gte('date', start).lte('date', end),
+      supabase.from('user_targets').select('calories').eq('user_id', uid).single(),
+      supabase.from('daily_supplements').select('id').eq('user_id', uid),
+    ])
+
+    const calTarget = targets?.calories || 2000
+    const supTotal = (allSups || []).length
+    const data = {}
+    const ensure = d => { if (!data[d]) data[d] = { runs: [], workouts: [], calories: 0, supTaken: 0, supTotal, calTarget } }
+
+    ;(runs || []).forEach(r => { ensure(r.date); data[r.date].runs.push(r) })
+    ;(workouts || []).forEach(w => { ensure(w.date); data[w.date].workouts.push(w) })
+    ;(mealLogs || []).forEach(ml => {
+      ensure(ml.date)
+      ;(ml.meal_items || []).forEach(item => {
+        data[ml.date].calories += ((item.foods?.calories || 0) * (item.quantity_g || 0)) / 100
+      })
     })
-    ;(runs || []).forEach(r => {
-      if (!allEvents[r.date]) allEvents[r.date] = []
-      allEvents[r.date].push({ type: 'running', label: `${r.distance_km}km` })
-    })
-    setEvents(allEvents)
+    const supByDate = {}
+    ;(supLogs || []).forEach(sl => { if (!supByDate[sl.date]) supByDate[sl.date] = 0; if (sl.taken) supByDate[sl.date]++ })
+    Object.entries(supByDate).forEach(([date, count]) => { ensure(date); data[date].supTaken = count })
+
+    setMonthData(data)
   }
 
-  async function savePlan() {
-    if (!form.name) return
-    await supabase.from('workout_logs').insert({
-      user_id: session.user.id, date: selectedDate, name: form.name, type: form.type
+  async function loadDayDetail(dateStr) {
+    setDetailLoading(true)
+    const uid = session.user.id
+    const [
+      { data: mealLogs }, { data: runs }, { data: workouts },
+      { data: supLogs }, { data: allSups }, { data: waterLogs },
+      { data: targets },
+    ] = await Promise.all([
+      supabase.from('meal_logs').select('meal_type, meal_items(quantity_g, group_name, foods(name, calories, protein, carbs, fat))').eq('user_id', uid).eq('date', dateStr),
+      supabase.from('running_logs').select('*').eq('user_id', uid).eq('date', dateStr),
+      supabase.from('workout_logs').select('*, workout_exercises(*)').eq('user_id', uid).eq('date', dateStr),
+      supabase.from('supplement_logs').select('taken, supplement_id').eq('user_id', uid).eq('date', dateStr),
+      supabase.from('daily_supplements').select('*').eq('user_id', uid),
+      supabase.from('water_logs').select('amount_ml').eq('user_id', uid).eq('date', dateStr),
+      supabase.from('user_targets').select('*').eq('user_id', uid).single(),
+    ])
+
+    const supMap = {}
+    ;(supLogs || []).forEach(sl => { supMap[sl.supplement_id] = sl.taken })
+
+    const allItems = (mealLogs || []).flatMap(ml => ml.meal_items || [])
+    const totalCals = allItems.reduce((a, i) => a + ((i.foods?.calories || 0) * (i.quantity_g || 0) / 100), 0)
+    const totalProt = allItems.reduce((a, i) => a + ((i.foods?.protein || 0) * (i.quantity_g || 0) / 100), 0)
+    const totalCarbs = allItems.reduce((a, i) => a + ((i.foods?.carbs || 0) * (i.quantity_g || 0) / 100), 0)
+    const totalFat = allItems.reduce((a, i) => a + ((i.foods?.fat || 0) * (i.quantity_g || 0) / 100), 0)
+    const totalWater = (waterLogs || []).reduce((s, w) => s + w.amount_ml, 0)
+
+    setDayDetail({
+      mealLogs: mealLogs || [], runs: runs || [], workouts: workouts || [],
+      supplements: (allSups || []).map(s => ({ ...s, taken: supMap[s.id] === true })),
+      totalCals: Math.round(totalCals), totalProt: Math.round(totalProt),
+      totalCarbs: Math.round(totalCarbs), totalFat: Math.round(totalFat),
+      totalWater, targets,
     })
-    setShowModal(false)
-    setForm({ name: '', type: 'strength' })
-    loadEvents()
+    setDetailLoading(false)
+  }
+
+  function openDay(dateStr) { setSelectedDate(dateStr); loadDayDetail(dateStr) }
+
+  async function savePlan() {
+    if (!planForm.name) return
+    await supabase.from('workout_logs').insert({ user_id: session.user.id, date: planDate, name: planForm.name, type: planForm.type })
+    setShowPlanModal(false); setPlanForm({ name: '', type: 'strength' }); loadMonthData()
   }
 
   const year = currentMonth.getFullYear()
   const month = currentMonth.getMonth()
-  const firstDay = (new Date(year, month, 1).getDay() + 6) % 7 // Mo=0
+  const firstDay = (new Date(year, month, 1).getDay() + 6) % 7
   const daysInMonth = new Date(year, month + 1, 0).getDate()
-  const monthNames = ['Ian', 'Feb', 'Mar', 'Apr', 'Mai', 'Iun', 'Iul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  const dayLabels = ['Lu', 'Ma', 'Mi', 'Jo', 'Vi', 'Sâ', 'Du']
+  const MONTHS = ['Ian','Feb','Mar','Apr','Mai','Iun','Iul','Aug','Sep','Oct','Nov','Dec']
+  const DAYS = ['Lu','Ma','Mi','Jo','Vi','Sâ','Du']
+  const MEAL_LABELS = { breakfast: '🌅 Mic dejun', lunch: '☀️ Prânz', dinner: '🌙 Cină', snack: '🍎 Gustare' }
 
-  function prevMonth() { setCurrentMonth(new Date(year, month - 1, 1)) }
-  function nextMonth() { setCurrentMonth(new Date(year, month + 1, 1)) }
+  function fmtPace(km, min) {
+    if (!km || !min) return '—'
+    const p = min / km; const m = Math.floor(p); const s = Math.round((p - m) * 60)
+    return `${m}:${s.toString().padStart(2,'0')} /km`
+  }
+
+  function fmtDur(min) {
+    const h = Math.floor(min / 60); const m = Math.round(min % 60)
+    return h > 0 ? `${h}h ${m}min` : `${m}min`
+  }
 
   return (
     <div className="space-y-3">
+      <button onClick={() => { setPlanDate(today); setShowPlanModal(true) }}
+        className="btn-ghost w-full py-2.5 text-sm">+ Planifică antrenament</button>
+
       <div className="card">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-4">
-          <button onClick={prevMonth} className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-dark-700">‹</button>
-          <h2 className="text-base font-semibold text-white">{monthNames[month]} {year}</h2>
-          <button onClick={nextMonth} className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-dark-700">›</button>
+        <div className="flex items-center justify-between mb-3">
+          <button onClick={() => setCurrentMonth(new Date(year, month-1, 1))} className="text-slate-400 hover:text-white w-8 h-8 rounded-lg hover:bg-dark-700 text-xl">‹</button>
+          <h2 className="text-base font-semibold text-white">{MONTHS[month]} {year}</h2>
+          <button onClick={() => setCurrentMonth(new Date(year, month+1, 1))} className="text-slate-400 hover:text-white w-8 h-8 rounded-lg hover:bg-dark-700 text-xl">›</button>
         </div>
 
-        {/* Day labels */}
         <div className="grid grid-cols-7 mb-1">
-          {dayLabels.map(d => <div key={d} className="text-center text-xs text-slate-500 py-1">{d}</div>)}
+          {DAYS.map(d => <div key={d} className="text-center text-xs text-slate-500 py-1">{d}</div>)}
         </div>
 
-        {/* Days grid */}
-        <div className="grid grid-cols-7 gap-0.5">
+        <div className="grid grid-cols-7 gap-1">
           {Array.from({ length: firstDay }).map((_, i) => <div key={`e${i}`} />)}
           {Array.from({ length: daysInMonth }).map((_, i) => {
             const day = i + 1
-            const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-            const hasEvents = events[dateStr]
+            const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+            const d = monthData[dateStr]
             const isToday = dateStr === today
+            const isFuture = dateStr > today
+            const hasRun = d?.runs.length > 0
+            const hasWorkout = d?.workouts.length > 0
+            const calOk = d && d.calories >= d.calTarget * 0.9
+            const supOk = d && d.supTotal > 0 && d.supTaken >= d.supTotal
+            const hasFood = d && d.calories > 0
+
             return (
-              <button key={day} onClick={() => { setSelectedDate(dateStr); setShowModal(true) }}
-                className={`aspect-square flex flex-col items-center justify-center rounded-lg text-xs transition-all hover:bg-dark-600
-                  ${isToday ? 'bg-brand-green/20 text-brand-green font-bold border border-brand-green/40' : 'text-slate-300'}
-                  ${hasEvents ? 'ring-1 ring-brand-blue/50' : ''}`}>
+              <button key={day}
+                onClick={() => isFuture ? (() => { setPlanDate(dateStr); setShowPlanModal(true) })() : openDay(dateStr)}
+                className={`aspect-square flex flex-col items-center justify-between py-1 px-0.5 rounded-xl text-xs transition-all
+                  ${isToday ? 'bg-brand-green/20 border border-brand-green/40 text-brand-green font-bold' : isFuture ? 'text-slate-600 hover:bg-dark-700' : 'text-slate-300 hover:bg-dark-600'}
+                  ${selectedDate === dateStr ? 'ring-2 ring-white/40' : ''}`}>
                 <span>{day}</span>
-                {hasEvents && (
-                  <div className="flex gap-0.5 mt-0.5">
-                    {hasEvents.slice(0, 3).map((e, i) => (
-                      <div key={i} className={`w-1 h-1 rounded-full ${e.type === 'running' ? 'bg-brand-blue' : 'bg-brand-orange'}`} />
-                    ))}
-                  </div>
-                )}
+                <div className="flex gap-0.5 flex-wrap justify-center pb-0.5">
+                  {hasRun    && <div className="w-1.5 h-1.5 rounded-full bg-brand-blue" />}
+                  {hasWorkout && <div className="w-1.5 h-1.5 rounded-full bg-brand-orange" />}
+                  {hasFood   && <div className={`w-1.5 h-1.5 rounded-full ${calOk ? 'bg-brand-green' : 'bg-red-400'}`} />}
+                  {d?.supTotal > 0 && <div className={`w-1.5 h-1.5 rounded-full ${supOk ? 'bg-brand-purple' : 'bg-slate-600'}`} />}
+                </div>
               </button>
             )
           })}
@@ -495,43 +570,171 @@ function CalendarTab({ session }) {
       </div>
 
       {/* Legend */}
-      <div className="flex gap-4 px-1">
-        <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-brand-blue" /><span className="text-xs text-slate-400">Alergare</span></div>
-        <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-brand-orange" /><span className="text-xs text-slate-400">Forță</span></div>
+      <div className="card py-2.5">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+          {[
+            { color: 'bg-brand-blue',   label: '🏃 Alergare' },
+            { color: 'bg-brand-orange', label: '🏋️ Forță' },
+            { color: 'bg-brand-green',  label: '✅ Calorii atinse' },
+            { color: 'bg-red-400',      label: '❌ Calorii neatinse' },
+            { color: 'bg-brand-purple', label: '💊 Supli. luate' },
+            { color: 'bg-slate-600',    label: '💊 Supli. incomplete' },
+          ].map(l => (
+            <div key={l.label} className="flex items-center gap-1.5">
+              <div className={`w-2 h-2 rounded-full shrink-0 ${l.color}`} />
+              <span className="text-xs text-slate-400">{l.label}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
-      <Modal open={showModal} onClose={() => setShowModal(false)} title={`📅 ${new Date(selectedDate + 'T12:00:00').toLocaleDateString('ro-RO')}`}>
-        <div className="space-y-3">
-          {/* Existing events */}
-          {events[selectedDate] && (
-            <div className="space-y-1.5">
-              {events[selectedDate].map((e, i) => (
-                <div key={i} className="bg-dark-700 rounded-xl px-3 py-2 flex items-center gap-2">
-                  <span>{e.type === 'running' ? '🏃' : '🏋️'}</span>
-                  <span className="text-sm text-slate-200">{e.label}</span>
+      {/* Day detail modal */}
+      <Modal open={!!selectedDate} onClose={() => { setSelectedDate(null); setDayDetail(null) }}
+        title={selectedDate ? `📅 ${new Date(selectedDate + 'T12:00:00').toLocaleDateString('ro-RO', { weekday: 'long', day: 'numeric', month: 'long' })}` : ''}>
+        {detailLoading ? (
+          <div className="flex items-center justify-center py-8 gap-2">
+            <div className="w-5 h-5 border-2 border-brand-green border-t-transparent rounded-full animate-spin" />
+            <span className="text-slate-400 text-sm">Se încarcă...</span>
+          </div>
+        ) : dayDetail ? (
+          <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+
+            {/* Nutrition summary */}
+            <div>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">🥗 Nutriție</p>
+              <div className="grid grid-cols-4 gap-1.5 mb-2">
+                {[
+                  { label: 'kcal', value: dayDetail.totalCals, target: dayDetail.targets?.calories, color: 'text-brand-green' },
+                  { label: 'prot.', value: dayDetail.totalProt, target: dayDetail.targets?.protein_g, color: 'text-brand-blue' },
+                  { label: 'carb.', value: dayDetail.totalCarbs, target: dayDetail.targets?.carbs_g, color: 'text-brand-orange' },
+                  { label: 'grăs.', value: dayDetail.totalFat, target: dayDetail.targets?.fat_g, color: 'text-brand-purple' },
+                ].map(item => (
+                  <div key={item.label} className={`bg-dark-700 rounded-xl p-2 text-center ${item.target && item.value >= item.target * 0.9 ? 'border border-brand-green/20' : ''}`}>
+                    <p className={`text-sm font-bold ${item.color}`}>{item.value}</p>
+                    {item.target && <p className="text-xs text-slate-600">/ {item.target}</p>}
+                    <p className="text-xs text-slate-500">{item.label}</p>
+                  </div>
+                ))}
+              </div>
+              {dayDetail.totalWater > 0 && (
+                <div className="bg-dark-700 rounded-xl px-3 py-2 flex justify-between text-xs">
+                  <span className="text-slate-400">💧 Apă</span>
+                  <span className="text-brand-blue font-medium">{dayDetail.totalWater} ml
+                    {dayDetail.targets?.water_ml && <span className="text-slate-500"> / {dayDetail.targets.water_ml} ml</span>}
+                  </span>
                 </div>
-              ))}
+              )}
+              {/* Meals breakdown */}
+              {dayDetail.mealLogs.length > 0 && (
+                <div className="space-y-1.5 mt-2">
+                  {dayDetail.mealLogs.map((ml, i) => {
+                    const mCals = (ml.meal_items || []).reduce((a, it) => a + ((it.foods?.calories || 0) * (it.quantity_g || 0) / 100), 0)
+                    return (
+                      <div key={i} className="bg-dark-700 rounded-xl overflow-hidden">
+                        <div className="flex justify-between items-center px-3 py-2 bg-dark-600">
+                          <span className="text-xs font-medium text-slate-300">{MEAL_LABELS[ml.meal_type] || ml.meal_type}</span>
+                          <span className="text-xs text-slate-400">{Math.round(mCals)} kcal</span>
+                        </div>
+                        {(ml.meal_items || []).map((item, j) => (
+                          <div key={j} className="flex justify-between px-3 py-1.5 text-xs border-t border-dark-700">
+                            <span className="text-slate-300">{item.foods?.name}</span>
+                            <span className="text-slate-500">{item.quantity_g}g</span>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {dayDetail.mealLogs.length === 0 && <p className="text-xs text-slate-600 text-center py-2">Nicio masă înregistrată</p>}
             </div>
-          )}
-          <p className="text-xs text-slate-400">Planifică un antrenament:</p>
+
+            {/* Sport */}
+            {(dayDetail.runs.length > 0 || dayDetail.workouts.length > 0) && (
+              <div>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">💪 Activitate</p>
+                <div className="space-y-2">
+                  {dayDetail.runs.map((r, i) => (
+                    <div key={i} className="bg-dark-700 rounded-xl px-3 py-2.5">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-base">🏃</span>
+                        <span className="text-sm font-medium text-white">{r.distance_km} km</span>
+                        <span className="text-xs text-slate-400 bg-dark-600 px-2 py-0.5 rounded-full">{fmtPace(r.distance_km, r.duration_min)}</span>
+                      </div>
+                      <p className="text-xs text-slate-500 ml-7">⏱ {fmtDur(r.duration_min)}{r.notes ? ` · ${r.notes.replace(/\[strava:[^\]]+\]/g, '').trim()}` : ''}</p>
+                    </div>
+                  ))}
+                  {dayDetail.workouts.map((w, i) => (
+                    <div key={i} className="bg-dark-700 rounded-xl px-3 py-2.5">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-base">🏋️</span>
+                        <span className="text-sm font-medium text-white">{w.name}</span>
+                      </div>
+                      {w.workout_exercises?.length > 0 && (
+                        <div className="ml-7 space-y-0.5">
+                          {w.workout_exercises.map((ex, j) => (
+                            <p key={j} className="text-xs text-slate-400">{ex.exercise_name} — {ex.sets}×{ex.reps} {ex.weight_kg > 0 ? `@ ${ex.weight_kg}kg` : ''}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Supplements */}
+            {dayDetail.supplements.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">💊 Suplimente</p>
+                <div className="space-y-1.5">
+                  {dayDetail.supplements.map((s, i) => (
+                    <div key={i} className={`flex items-center gap-3 px-3 py-2 rounded-xl ${s.taken ? 'bg-brand-green/10 border border-brand-green/20' : 'bg-dark-700'}`}>
+                      <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${s.taken ? 'bg-brand-green border-brand-green' : 'border-slate-600'}`}>
+                        {s.taken && <span className="text-dark-900 text-xs font-bold">✓</span>}
+                      </div>
+                      <span className={`text-sm ${s.taken ? 'text-brand-green' : 'text-slate-400 line-through'}`}>{s.name}</span>
+                      <span className="text-xs text-slate-500 ml-auto">{s.amount_g} {s.unit}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Plan button for past days too */}
+            <button onClick={() => { setSelectedDate(null); setDayDetail(null); setPlanDate(selectedDate); setShowPlanModal(true) }}
+              className="btn-ghost w-full py-2.5 text-sm">+ Adaugă antrenament în această zi</button>
+          </div>
+        ) : null}
+      </Modal>
+
+      {/* Plan modal */}
+      <Modal open={showPlanModal} onClose={() => setShowPlanModal(false)} title={`Planifică — ${new Date(planDate + 'T12:00:00').toLocaleDateString('ro-RO')}`}>
+        <div className="space-y-3">
           <div>
-            <label className="text-xs text-slate-400 block mb-1">Tip</label>
+            <label className="text-xs text-slate-400 block mb-1">Data</label>
+            <input className="input" type="date" value={planDate} onChange={e => setPlanDate(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 block mb-2">Tip</label>
             <div className="flex gap-2">
-              <button onClick={() => setForm(p => ({ ...p, type: 'strength' }))}
-                className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${form.type === 'strength' ? 'bg-brand-orange/20 text-brand-orange border border-brand-orange/40' : 'bg-dark-700 text-slate-400'}`}>
+              <button onClick={() => setPlanForm(p => ({ ...p, type: 'strength' }))}
+                className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${planForm.type === 'strength' ? 'bg-brand-orange/20 text-brand-orange border border-brand-orange/40' : 'bg-dark-700 text-slate-400'}`}>
                 🏋️ Forță
               </button>
-              <button onClick={() => setForm(p => ({ ...p, type: 'running' }))}
-                className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${form.type === 'running' ? 'bg-brand-blue/20 text-brand-blue border border-brand-blue/40' : 'bg-dark-700 text-slate-400'}`}>
+              <button onClick={() => setPlanForm(p => ({ ...p, type: 'running' }))}
+                className={`flex-1 py-2 rounded-xl text-sm font-medium transition-all ${planForm.type === 'running' ? 'bg-brand-blue/20 text-brand-blue border border-brand-blue/40' : 'bg-dark-700 text-slate-400'}`}>
                 🏃 Alergare
               </button>
             </div>
           </div>
           <div>
             <label className="text-xs text-slate-400 block mb-1">Nume</label>
-            <input className="input" placeholder="ex: Leg Day / 5km ușor" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
+            <input className="input" placeholder="ex: Leg Day / 5km ușor" value={planForm.name}
+              onChange={e => setPlanForm(p => ({ ...p, name: e.target.value }))}
+              onKeyDown={e => e.key === 'Enter' && savePlan()} />
           </div>
-          <button onClick={savePlan} className="btn-primary w-full py-3">Adaugă în calendar</button>
+          <button onClick={savePlan} className="btn-primary w-full py-3">Salvează</button>
         </div>
       </Modal>
     </div>

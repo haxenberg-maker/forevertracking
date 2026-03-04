@@ -1,4 +1,4 @@
-export default function ProgressRing({ value, max, size = 120, strokeWidth = 10, color = '#4ade80', label, sublabel }) {
+export default function ProgressRing({ value, max, size = 120, strokeWidth = 10, color = '#4ade80', label, sublabel, showTarget = false }) {
   const radius = (size - strokeWidth) / 2
   const circumference = 2 * Math.PI * radius
   const progress = Math.min(value / max, 1)
@@ -18,8 +18,18 @@ export default function ProgressRing({ value, max, size = 120, strokeWidth = 10,
             style={{ transition: 'stroke-dashoffset 0.6s ease' }} />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-xl font-bold text-white">{Math.round(value)}</span>
-          {sublabel && <span className="text-xs text-slate-400">{sublabel}</span>}
+          {showTarget ? (
+            <>
+              <span className="font-bold text-white leading-tight" style={{ fontSize: size * 0.17 }}>{Math.round(value)}</span>
+              <span className="text-slate-500 leading-tight" style={{ fontSize: size * 0.1 }}>/ {max}</span>
+              <span className="text-slate-400 leading-tight" style={{ fontSize: size * 0.1 }}>kcal</span>
+            </>
+          ) : (
+            <>
+              <span className="text-xl font-bold text-white">{Math.round(value)}</span>
+              {sublabel && <span className="text-xs text-slate-400">{sublabel}</span>}
+            </>
+          )}
         </div>
       </div>
       {label && <span className="text-xs text-slate-400 mt-1">{label}</span>}

@@ -315,6 +315,8 @@ export default function Dashboard({ session }) {
   const [todayNutrition, setTodayNutrition] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
   const [weight, setWeight] = useState(null)
   const [todayWorkouts, setTodayWorkouts] = useState([])
+  const [lastWorkouts, setLastWorkouts] = useState([])
+  const [caloriesBurned, setCaloriesBurned] = useState(0)
   const [loading, setLoading] = useState(true)
 
   const now = new Date()
@@ -353,11 +355,43 @@ export default function Dashboard({ session }) {
     const { data: wg } = await supabase.from('weight_logs').select('weight_kg').eq('user_id', uid).order('date', { ascending: false }).limit(1)
     if (wg?.[0]) setWeight(wg[0].weight_kg)
 
-    const { data: wo } = await supabase.from('workout_logs').select('id, name, type').eq('user_id', uid).eq('date', today)
+    const { data: wo } = await supabase.from('workout_logs').select('id, name, type, date').eq('user_id', uid).eq('date', today)
     if (wo) setTodayWorkouts(wo)
 
+    // Dacă nu e niciun antrenament azi, ia ultimele (incluzând alergări)
+    if (!wo || wo.length === 0) {
+      const [{ data: lastWo }, { data: lastRuns }] = await Promise.all([
+        supabase.from('workout_logs').select('id, name, type, date')
+          .eq('user_id', uid).lt('date', today).order('date', { ascending: false }).limit(3),
+        supabase.from('running_logs').select('id, distance_km, duration_min, date')
+          .eq('user_id', uid).lt('date', today).order('date', { ascending: false }).limit(3),
+      ])
+      const combined = [
+        ...(lastWo || []).map(w => ({ ...w, _kind: 'workout' })),
+        ...(lastRuns || []).map(r => ({ ...r, name: `${r.distance_km} km alergare`, type: 'running', _kind: 'run' })),
+      ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3)
+      if (combined.length) setLastWorkouts(combined)
+    }
+
+    // ── Calorii arse ──────────────────────────────────
+    // Alergări azi — 60 kcal/km estimare (MET 8 ~= 60 kcal/km indiferent de greutate ca aproximație)
+    const { data: runs } = await supabase.from('running_logs').select('distance_km, duration_min').eq('user_id', uid).eq('date', today)
+    let burned = 0
+    ;(runs || []).forEach(r => { burned += (r.distance_km || 0) * 60 })
+
+    // Antrenamente forță azi — 300 kcal/sesiune estimare
+    const strengthCount = (wo || []).filter(w => w.type === 'strength').length
+    burned += strengthCount * 300
+
+    // Dacă are Strava conectat, încearcă să ia date mai precise
+    // (strava_sync returnează activitățile dar nu stocăm calorii direct în DB)
+    // Folosim estimările de mai sus care sunt deja acurate pentru alergare
+
+    setCaloriesBurned(Math.round(burned))
     setLoading(false)
   }
+
+  const netCalories = Math.round(todayNutrition.calories) - caloriesBurned
 
   return (
     <div className="page fade-in">
@@ -371,16 +405,34 @@ export default function Dashboard({ session }) {
       <div className="card mb-3 cursor-pointer" onClick={() => navigate('/nutritie')}>
         <div className="flex items-center gap-4">
           <ProgressRing value={todayNutrition.calories} max={targets.calories}
-            size={100} strokeWidth={9} color="#4ade80" sublabel="kcal" />
+            size={100} strokeWidth={9} color="#4ade80" showTarget={true} />
           <div className="flex-1 space-y-2.5">
             <MacroBar label="Proteine" value={todayNutrition.protein} max={targets.protein_g} color="#60a5fa" />
             <MacroBar label="Carbohidrați" value={todayNutrition.carbs} max={targets.carbs_g} color="#fb923c" />
             <MacroBar label="Grăsimi" value={todayNutrition.fat} max={targets.fat_g} color="#a78bfa" />
           </div>
         </div>
-        <div className="mt-3 pt-3 border-t border-dark-600 flex justify-between text-xs">
-          <span className="text-slate-400">Calorii consumate</span>
-          <span className="text-brand-green font-semibold">{Math.round(todayNutrition.calories)} / {targets.calories} kcal</span>
+
+        {/* Calorii consumate + arse + net */}
+        <div className="mt-3 pt-3 border-t border-dark-600 space-y-1.5">
+          <div className="flex justify-between text-xs">
+            <span className="text-slate-400">🍽️ Consumate</span>
+            <span className="text-brand-green font-semibold">{Math.round(todayNutrition.calories)} / {targets.calories} kcal</span>
+          </div>
+          {caloriesBurned > 0 && (
+            <>
+              <div className="flex justify-between text-xs">
+                <span className="text-slate-400">🔥 Arse (activitate)</span>
+                <span className="text-brand-orange font-semibold">−{caloriesBurned} kcal</span>
+              </div>
+              <div className="flex justify-between text-xs pt-1 border-t border-dark-700">
+                <span className="text-slate-300 font-medium">⚖️ Net</span>
+                <span className={`font-bold ${netCalories < 0 ? 'text-brand-blue' : 'text-white'}`}>
+                  {netCalories > 0 ? '+' : ''}{netCalories} kcal
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -409,12 +461,12 @@ export default function Dashboard({ session }) {
       {/* Sport */}
       <div className="card cursor-pointer" onClick={() => navigate('/sport')}>
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-white">Antrenamente azi</h2>
+          <h2 className="text-sm font-semibold text-white">
+            {todayWorkouts.length > 0 ? 'Antrenamente azi' : 'Ultimele antrenamente'}
+          </h2>
           <span className="text-xs text-brand-green">→ Sport</span>
         </div>
-        {todayWorkouts.length === 0 ? (
-          <p className="text-slate-500 text-sm text-center py-2">Niciun antrenament înregistrat azi</p>
-        ) : (
+        {todayWorkouts.length > 0 ? (
           <div className="space-y-2">
             {todayWorkouts.map(w => (
               <div key={w.id} className="flex items-center gap-2 bg-dark-700 rounded-xl px-3 py-2">
@@ -423,6 +475,22 @@ export default function Dashboard({ session }) {
               </div>
             ))}
           </div>
+        ) : lastWorkouts.length > 0 ? (
+          <div className="space-y-2">
+            {lastWorkouts.map(w => (
+              <div key={w.id} className="flex items-center gap-2 bg-dark-700 rounded-xl px-3 py-2">
+                <span>{w.type === 'running' ? '🏃' : '🏋️'}</span>
+                <div className="flex-1">
+                  <span className="text-sm text-slate-200">{w.name}</span>
+                  <span className="text-xs text-slate-500 ml-2">
+                    {new Date(w.date + 'T12:00:00').toLocaleDateString('ro-RO', { day: 'numeric', month: 'short' })}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-slate-500 text-sm text-center py-2">Niciun antrenament înregistrat încă</p>
         )}
       </div>
     </div>
