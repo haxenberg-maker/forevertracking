@@ -3,15 +3,94 @@ import { supabase } from '../lib/supabase'
 import Modal from '../components/Modal'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from 'recharts'
 
-const today = new Date().toISOString().split('T')[0]
+function getToday() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
+// ─── Strava Sync Hook ──────────────────────────────────
+
+function useStravaSync(session, onSuccess) {
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState(null)
+  const [stravaConnected, setStravaConnected] = useState(false)
+
+  useEffect(() => { checkStrava() }, [])
+
+  async function checkStrava() {
+    const { data } = await supabase.from('strava_tokens').select('athlete_id').eq('user_id', session.user.id).single()
+    setStravaConnected(!!data)
+  }
+
+  async function syncStrava(type) {
+    setSyncing(true); setSyncMsg('Se sincronizează cu Strava...')
+    try {
+      const { data: tokenData } = await supabase.from('strava_tokens').select('*').eq('user_id', session.user.id).single()
+      if (!tokenData) { setSyncMsg('❌ Strava nu e conectat. Conectează din Profil.'); setSyncing(false); return }
+
+      const res = await fetch('/.netlify/functions/strava-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ access_token: tokenData.access_token, refresh_token: tokenData.refresh_token, expires_at: tokenData.expires_at }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+
+      // Save new tokens if refreshed
+      if (data.newTokenData) {
+        await supabase.from('strava_tokens').update(data.newTokenData).eq('user_id', session.user.id)
+      }
+
+      let imported = 0
+      if (type === 'running' && data.running?.length) {
+        for (const run of data.running) {
+          // Check if already exists by notes containing strava_id
+          const { data: existing } = await supabase.from('running_logs')
+            .select('id').eq('user_id', session.user.id).like('notes', `%${run.strava_id}%`).single()
+          if (existing) continue
+          await supabase.from('running_logs').insert({
+            user_id: session.user.id, date: run.date,
+            distance_km: run.distance_km, duration_min: run.duration_min,
+            notes: `${run.notes} [strava:${run.strava_id}]`,
+          })
+          imported++
+        }
+        setSyncMsg(`✅ ${imported} alergări noi importate din Strava!`)
+      } else if (type === 'strength' && data.workouts?.length) {
+        for (const wo of data.workouts) {
+          const { data: existing } = await supabase.from('workout_logs')
+            .select('id').eq('user_id', session.user.id).like('notes', `%${wo.strava_id}%`).single()
+          if (existing) continue
+          await supabase.from('workout_logs').insert({
+            user_id: session.user.id, date: wo.date, name: wo.name, type: 'strength',
+            notes: `${wo.notes} [strava:${wo.strava_id}]`,
+          })
+          imported++
+        }
+        setSyncMsg(`✅ ${imported} antrenamente noi importate din Strava!`)
+      } else {
+        setSyncMsg('✅ Nicio activitate nouă de importat.')
+      }
+      onSuccess()
+    } catch (err) {
+      setSyncMsg(`❌ ${err.message}`)
+    }
+    setSyncing(false)
+    setTimeout(() => setSyncMsg(null), 4000)
+  }
+
+  return { syncing, syncMsg, stravaConnected, syncStrava }
+}
 
 // ─── Alergare ─────────────────────────────────────────
 
 function AlergareTab({ session }) {
+  const today = getToday()
   const [runs, setRuns] = useState([])
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({ date: today, distance_km: '', duration_min: '', notes: '' })
   const [loading, setLoading] = useState(true)
+  const { syncing, syncMsg, stravaConnected, syncStrava } = useStravaSync(session, loadRuns)
 
   useEffect(() => { loadRuns() }, [])
 
@@ -63,7 +142,21 @@ function AlergareTab({ session }) {
 
   return (
     <div className="space-y-3">
-      <button onClick={() => setShowModal(true)} className="btn-primary w-full py-3">🏃 Adaugă alergare</button>
+      <div className="flex gap-2">
+        <button onClick={() => setShowModal(true)} className="btn-primary flex-1 py-3">🏃 Adaugă alergare</button>
+        {stravaConnected && (
+          <button onClick={() => syncStrava('running')} disabled={syncing}
+            className="flex items-center gap-1.5 bg-orange-500/20 text-orange-400 border border-orange-500/30 px-3 py-3 rounded-xl hover:bg-orange-500/30 transition-all text-sm font-medium disabled:opacity-50">
+            {syncing ? <span className="w-4 h-4 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" /> : '🟠'}
+            Strava
+          </button>
+        )}
+      </div>
+      {syncMsg && (
+        <div className={`rounded-xl px-3 py-2.5 text-sm ${syncMsg.startsWith('✅') ? 'bg-brand-green/20 text-brand-green' : 'bg-red-500/20 text-red-400'}`}>
+          {syncMsg}
+        </div>
+      )}
 
       {runs.length > 0 && (
         <div className="grid grid-cols-3 gap-2">
@@ -134,11 +227,13 @@ function AlergareTab({ session }) {
 // ─── Forță ─────────────────────────────────────────
 
 function FortaTab({ session }) {
+  const today = getToday()
   const [workouts, setWorkouts] = useState([])
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({ date: today, name: '', notes: '' })
   const [exercises, setExercises] = useState([{ exercise_name: '', sets: '3', reps: '10', weight_kg: '0' }])
   const [loading, setLoading] = useState(true)
+  const { syncing, syncMsg, stravaConnected, syncStrava } = useStravaSync(session, loadWorkouts)
 
   useEffect(() => { loadWorkouts() }, [])
 
@@ -199,7 +294,21 @@ function FortaTab({ session }) {
 
   return (
     <div className="space-y-3">
-      <button onClick={() => setShowModal(true)} className="btn-primary w-full py-3">🏋️ Adaugă antrenament</button>
+      <div className="flex gap-2">
+        <button onClick={() => setShowModal(true)} className="btn-primary flex-1 py-3">🏋️ Adaugă antrenament</button>
+        {stravaConnected && (
+          <button onClick={() => syncStrava('strength')} disabled={syncing}
+            className="flex items-center gap-1.5 bg-orange-500/20 text-orange-400 border border-orange-500/30 px-3 py-3 rounded-xl hover:bg-orange-500/30 transition-all text-sm font-medium disabled:opacity-50">
+            {syncing ? <span className="w-4 h-4 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" /> : '🟠'}
+            Strava
+          </button>
+        )}
+      </div>
+      {syncMsg && (
+        <div className={`rounded-xl px-3 py-2.5 text-sm ${syncMsg.startsWith('✅') ? 'bg-brand-green/20 text-brand-green' : 'bg-red-500/20 text-red-400'}`}>
+          {syncMsg}
+        </div>
+      )}
 
       {loading ? <p className="text-center text-slate-500 text-sm py-4">Se încarcă...</p> :
         workouts.length === 0 ? (
@@ -296,6 +405,7 @@ function FortaTab({ session }) {
 // ─── Calendar ────────────────────────────────────────
 
 function CalendarTab({ session }) {
+  const today = getToday()
   const [events, setEvents] = useState([])
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [showModal, setShowModal] = useState(false)
