@@ -36,7 +36,7 @@ function AziTab({ session }) {
   }
 
   async function loadFoods() {
-    const { data } = await supabase.from('foods').select('*').eq('user_id', session.user.id).order('name')
+    const { data } = await supabase.from('foods').select('*').order('name')
     setFoods(data || [])
   }
 
@@ -201,7 +201,7 @@ function AlimenteTab({ session }) {
 
   async function loadFoods() {
     setLoading(true)
-    const { data } = await supabase.from('foods').select('*').eq('user_id', session.user.id).order('name')
+    const { data } = await supabase.from('foods').select('*').order('name')
     setFoods(data || [])
     setLoading(false)
   }
