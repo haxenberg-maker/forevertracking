@@ -17,10 +17,30 @@ const ACTIVITY_LEVELS = [
 ]
 
 const GOALS = [
-  { key: 'lose',     label: 'Slăbire',       emoji: '📉', kcalAdjust: -400 },
-  { key: 'maintain', label: 'Menținere',     emoji: '⚖️', kcalAdjust: 0 },
-  { key: 'gain',     label: 'Masă',         emoji: '📈', kcalAdjust: 300 },
+  { key: 'lose',     label: 'Slăbire',   emoji: '📉', kcalAdjust: -400 },
+  { key: 'maintain', label: 'Menținere', emoji: '⚖️', kcalAdjust: 0 },
+  { key: 'gain',     label: 'Masă',      emoji: '📈', kcalAdjust: 300 },
 ]
+
+const THEMES = [
+  { key: 'dark',    label: 'Dark',    preview: ['#0f0f13','#1a1a24','#4ade80'] },
+  { key: 'ocean',   label: 'Ocean',   preview: ['#0a1628','#0f2244','#38bdf8'] },
+  { key: 'orange',  label: 'Vibe',    preview: ['#1a0f00','#2d1a00','#fb923c'] },
+  { key: 'light',   label: 'Light',   preview: ['#f8fafc','#f1f5f9','#16a34a'] },
+]
+
+function applyTheme(key) {
+  const root = document.documentElement
+  const themes = {
+    dark:   { '--bg-900': '#0f0f13', '--bg-800': '#1a1a24', '--bg-700': '#242433', '--bg-600': '#2e2e42', '--accent': '#4ade80', '--text': '#f1f5f9' },
+    ocean:  { '--bg-900': '#0a1628', '--bg-800': '#0f2244', '--bg-700': '#162d55', '--bg-600': '#1e3a6e', '--accent': '#38bdf8', '--text': '#e0f2fe' },
+    orange: { '--bg-900': '#1a0f00', '--bg-800': '#2d1a00', '--bg-700': '#3d2400', '--bg-600': '#4d2e00', '--accent': '#fb923c', '--text': '#fff7ed' },
+    light:  { '--bg-900': '#f8fafc', '--bg-800': '#f1f5f9', '--bg-700': '#e2e8f0', '--bg-600': '#cbd5e1', '--accent': '#16a34a', '--text': '#0f172a' },
+  }
+  const t = themes[key] || themes.dark
+  Object.entries(t).forEach(([k, v]) => root.style.setProperty(k, v))
+  localStorage.setItem('app_theme', key)
+}
 
 function calcBMR(gender, weight, height, age) {
   if (!weight || !height || !age) return 0
@@ -38,50 +58,65 @@ function MacroSlider({ label, emoji, colorClass, colorHex, value, onChange }) {
       </div>
       <input type="range" min={10} max={70} step={1} value={value}
         onChange={e => onChange(parseInt(e.target.value))}
-        className="w-full h-2 rounded-full appearance-none cursor-pointer"
-        style={{ background: `linear-gradient(to right, ${colorHex} 0%, ${colorHex} ${((value-10)/60)*100}%, #2e2e42 ${((value-10)/60)*100}%, #2e2e42 100%)` }} />
+        className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+        style={{ accentColor: colorHex }} />
     </div>
   )
 }
 
-// ─── Strava Card ──────────────────────────────────────
+// ─── STRAVA CARD ──────────────────────────────────────
 function StravaCard({ session }) {
-  const [token, setToken] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [disconnecting, setDisconnecting] = useState(false)
-  const STRAVA_CLIENT_ID = import.meta.env.VITE_STRAVA_CLIENT_ID
-  const REDIRECT_URI = `${window.location.origin}/strava-callback`
-  const stravaAuthUrl = `https://www.strava.com/oauth/authorize?client_id=${STRAVA_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&approval_prompt=auto&scope=read,activity:read_all`
+  const [connected, setConnected] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [lastSync, setLastSync] = useState(null)
 
-  useEffect(() => {
-    supabase.from('strava_tokens').select('athlete_id').eq('user_id', session.user.id).single()
-      .then(({ data }) => { setToken(data || null); setLoading(false) })
-  }, [])
+  useEffect(() => { checkStrava() }, [])
 
-  async function disconnect() {
+  async function checkStrava() {
+    const { data } = await supabase.from('strava_tokens').select('id, updated_at').eq('user_id', session.user.id).single()
+    if (data) { setConnected(true); setLastSync(data.updated_at) }
+  }
+
+  async function syncStrava() {
+    setSyncing(true)
+    try {
+      const res = await fetch('/.netlify/functions/strava-sync', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: session.user.id }),
+      })
+      if (res.ok) { setLastSync(new Date().toISOString()); alert('✅ Sincronizat!') }
+      else { const e = await res.json(); alert('Eroare: ' + (e.error || 'necunoscută')) }
+    } catch { alert('Eroare de rețea') }
+    setSyncing(false)
+  }
+
+  function connectStrava() {
+    const clientId = import.meta.env.VITE_STRAVA_CLIENT_ID
+    const redirect = encodeURIComponent(window.location.origin + '/strava-callback')
+    window.location.href = `https://www.strava.com/oauth/authorize?client_id=${clientId}&response_type=code&redirect_uri=${redirect}&scope=activity:read_all`
+  }
+
+  async function disconnectStrava() {
     if (!confirm('Deconectezi Strava?')) return
-    setDisconnecting(true)
     await supabase.from('strava_tokens').delete().eq('user_id', session.user.id)
-    setToken(null); setDisconnecting(false)
+    setConnected(false)
   }
 
   return (
     <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        <span className="text-lg">🟠</span>
-        <div>
-          <p className="text-sm font-medium text-white">Strava</p>
-          {!loading && <p className="text-xs text-slate-500">{token ? `Conectat · Athlete #${token.athlete_id}` : 'Neconectat'}</p>}
-        </div>
+      <div>
+        <p className="text-sm font-medium text-white">🟠 Strava</p>
+        {connected && lastSync && <p className="text-xs text-slate-500">Sincronizat: {new Date(lastSync).toLocaleDateString('ro-RO')}</p>}
+        {!connected && <p className="text-xs text-slate-500">Conectează pentru import activități</p>}
       </div>
-      {!loading && (token ? (
-        <button onClick={disconnect} disabled={disconnecting}
-          className="text-xs bg-red-500/10 text-red-400 px-3 py-1.5 rounded-lg hover:bg-red-500/20">
-          {disconnecting ? '...' : 'Deconectează'}
-        </button>
+      {connected ? (
+        <div className="flex gap-2">
+          <button onClick={syncStrava} disabled={syncing} className="text-xs bg-brand-orange/20 text-brand-orange px-3 py-1.5 rounded-lg">{syncing ? '...' : '🔄'}</button>
+          <button onClick={disconnectStrava} className="text-xs bg-red-500/10 text-red-400 px-3 py-1.5 rounded-lg">✕</button>
+        </div>
       ) : (
-        <a href={stravaAuthUrl} className="text-xs bg-orange-500/20 text-orange-400 px-3 py-1.5 rounded-lg hover:bg-orange-500/30">Conectează</a>
-      ))}
+        <button onClick={connectStrava} className="text-xs bg-brand-orange/20 text-brand-orange border border-brand-orange/30 px-3 py-2 rounded-xl">Conectează</button>
+      )}
     </div>
   )
 }
@@ -93,8 +128,9 @@ export default function Profil({ session, isAdmin }) {
   const [targets, setTargets] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showEditProfile, setShowEditProfile] = useState(false)
-  const [showEditTargets, setShowEditTargets] = useState(false)
   const [showWeightModal, setShowWeightModal] = useState(false)
+  const [showWaterModal, setShowWaterModal] = useState(false)
+  const [waterTarget, setWaterTarget] = useState(2000)
   const [weightForm, setWeightForm] = useState({ date: getToday(), weight_kg: '' })
   const [editProfile, setEditProfile] = useState({})
   const [macroP, setMacroP] = useState(25)
@@ -103,6 +139,7 @@ export default function Profil({ session, isAdmin }) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
+  const [activeTheme, setActiveTheme] = useState(() => localStorage.getItem('app_theme') || 'dark')
 
   useEffect(() => { loadData() }, [])
 
@@ -116,7 +153,7 @@ export default function Profil({ session, isAdmin }) {
     ])
     setWeights(wg || [])
     if (pr) setProfile(p => ({ ...p, ...pr }))
-    if (tg) setTargets(tg)
+    if (tg) { setTargets(tg); setWaterTarget(tg.water_ml || 2000) }
     setLoading(false)
   }
 
@@ -160,6 +197,11 @@ export default function Profil({ session, isAdmin }) {
     setTimeout(() => { setSaved(false); setShowEditProfile(false); loadData() }, 1500)
   }
 
+  async function saveWaterTarget() {
+    await supabase.from('user_targets').upsert({ user_id: session.user.id, water_ml: waterTarget }, { onConflict: 'user_id' })
+    setShowWaterModal(false); loadData()
+  }
+
   async function saveWeight() {
     if (!weightForm.weight_kg) return
     await supabase.from('weight_logs').insert({ user_id: session.user.id, date: weightForm.date, weight_kg: parseFloat(weightForm.weight_kg) })
@@ -175,98 +217,127 @@ export default function Profil({ session, isAdmin }) {
     date: new Date(w.date + 'T12:00:00').toLocaleDateString('ro-RO', { day: '2-digit', month: 'short' }),
     kg: w.weight_kg
   }))
-  const tooltipStyle = { backgroundColor: '#1a1a24', border: '1px solid #2e2e42', borderRadius: 12, color: '#f1f5f9', fontSize: 12 }
-  const activityLabel = ACTIVITY_LEVELS.find(a => a.key === profile.activity_level)
-  const goalLabel = GOALS.find(g => g.key === (profile.goal || 'maintain'))
+
+  if (loading) return <div className="page flex items-center justify-center"><div className="w-8 h-8 border-2 border-brand-green border-t-transparent rounded-full animate-spin" /></div>
+
+  const currentBMR = calcBMR(profile.gender, latestWeight, profile.height_cm, profile.age)
+  const currentAct = ACTIVITY_LEVELS.find(a => a.key === profile.activity_level)
+  const currentGoal = GOALS.find(g => g.key === profile.goal)
+  const currentTDEE = currentBMR > 0 ? Math.round(currentBMR * (currentAct?.multiplier || 1.55)) : null
+  const currentTarget = currentTDEE ? Math.max(1200, currentTDEE + (currentGoal?.kcalAdjust || 0)) : null
 
   return (
-    <div className="page fade-in space-y-3">
-      <h1 className="text-2xl font-bold text-white">👤 Profil</h1>
-
-      {/* CONT */}
+    <div className="page fade-in space-y-4">
+      {/* Header */}
       <div className="card">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-brand-purple/30 to-brand-blue/30 flex items-center justify-center border border-brand-purple/20">
-            <span className="text-xl">👤</span>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-brand-green/30 to-brand-blue/20 flex items-center justify-center text-2xl">
+              {profile.gender === 'female' ? '👩' : '👨'}
+            </div>
+            <div>
+              <p className="font-bold text-white text-lg">{profile.full_name || session.user.email?.split('@')[0]}</p>
+              <p className="text-xs text-slate-400">{session.user.email}</p>
+              {isAdmin && <span className="text-xs bg-brand-purple/20 text-brand-purple px-2 py-0.5 rounded-full">Admin</span>}
+            </div>
           </div>
-          <div className="flex-1">
-            <p className="font-semibold text-white text-sm">{session.user.email}</p>
-            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isAdmin ? 'bg-brand-orange/20 text-brand-orange' : 'bg-dark-700 text-slate-400'}`}>
-              {isAdmin ? '⚡ Administrator' : '👤 Standard'}
+          <button onClick={openEditProfile} className="text-xs bg-dark-700 text-slate-300 px-3 py-2 rounded-xl hover:bg-dark-600">✏️ Editează</button>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {[
+            { label: 'Vârstă', value: profile.age ? `${profile.age} ani` : '—' },
+            { label: 'Înălțime', value: profile.height_cm ? `${profile.height_cm} cm` : '—' },
+            { label: 'Greutate', value: latestWeight ? `${latestWeight} kg` : '—' },
+          ].map(s => (
+            <div key={s.label} className="bg-dark-700 rounded-xl p-2.5 text-center">
+              <p className="text-sm font-bold text-white">{s.value}</p>
+              <p className="text-xs text-slate-500">{s.label}</p>
+            </div>
+          ))}
+        </div>
+        {profile.activity_level && (
+          <div className="flex gap-2 mt-2">
+            <span className="text-xs bg-dark-700 text-slate-300 px-3 py-1.5 rounded-full">
+              {currentAct?.emoji} {currentAct?.label}
+            </span>
+            <span className="text-xs bg-dark-700 text-slate-300 px-3 py-1.5 rounded-full">
+              {currentGoal?.emoji} {currentGoal?.label}
             </span>
           </div>
-          <button onClick={openEditProfile} className="text-xs bg-dark-700 text-slate-300 hover:text-white px-3 py-1.5 rounded-lg hover:bg-dark-600 transition-all">
-            ✏️ Editează
-          </button>
-        </div>
+        )}
       </div>
 
-      {/* PROFIL COMPACT VIEW */}
-      {!loading && (
+      {/* Target caloric + explanation */}
+      {targets && (
         <div className="card space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-white">📊 Datele mele</h2>
+            <h2 className="text-sm font-semibold text-white">🎯 Targeturi zilnice</h2>
+            <button onClick={() => setShowWaterModal(true)} className="text-xs text-brand-blue hover:text-brand-blue/80">💧 {targets.water_ml || 2000} ml</button>
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-4 gap-2 text-center">
             {[
-              { label: 'Vârstă', value: profile.age ? `${profile.age} ani` : '—' },
-              { label: 'Înălțime', value: profile.height_cm ? `${profile.height_cm} cm` : '—' },
-              { label: 'Greutate', value: latestWeight ? `${latestWeight} kg` : '—' },
+              { label: 'kcal', value: targets.calories, color: 'text-brand-green' },
+              { label: 'prot.', value: `${targets.protein_g}g`, color: 'text-brand-blue' },
+              { label: 'carb.', value: `${targets.carbs_g}g`, color: 'text-brand-orange' },
+              { label: 'grăs.', value: `${targets.fat_g}g`, color: 'text-brand-purple' },
             ].map(s => (
-              <div key={s.label} className="bg-dark-700 rounded-xl p-2.5 text-center">
-                <p className="text-sm font-bold text-white">{s.value}</p>
+              <div key={s.label} className="bg-dark-700 rounded-xl p-2">
+                <p className={`text-base font-bold ${s.color}`}>{s.value}</p>
                 <p className="text-xs text-slate-500">{s.label}</p>
               </div>
             ))}
           </div>
-          <div className="flex gap-2">
-            <div className="flex-1 bg-dark-700 rounded-xl px-3 py-2 flex items-center gap-2">
-              <span>{activityLabel?.emoji}</span>
-              <p className="text-xs text-slate-300">{activityLabel?.label || '—'}</p>
-            </div>
-            <div className="flex-1 bg-dark-700 rounded-xl px-3 py-2 flex items-center gap-2">
-              <span>{goalLabel?.emoji}</span>
-              <p className="text-xs text-slate-300">{goalLabel?.label || '—'}</p>
-            </div>
-          </div>
-          {targets && (
-            <div className="bg-brand-green/10 border border-brand-green/20 rounded-xl px-3 py-2 flex justify-between items-center">
-              <span className="text-xs text-slate-400">🎯 Target zilnic</span>
-              <span className="text-sm font-bold text-brand-green">{targets.calories} kcal</span>
+          {/* Calorie explanation */}
+          {currentBMR > 0 && currentTDEE && (
+            <div className="bg-dark-700 rounded-xl p-3 space-y-1.5">
+              <p className="text-xs font-semibold text-slate-300 mb-2">📐 Cum s-a calculat targetul caloric</p>
+              <div className="space-y-1 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">BMR (Mifflin-St Jeor)</span>
+                  <span className="text-white font-medium">{Math.round(currentBMR)} kcal</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">× {currentAct?.label} ({currentAct?.multiplier})</span>
+                  <span className="text-white font-medium">TDEE: {currentTDEE} kcal</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">{currentGoal?.emoji} {currentGoal?.label} ({currentGoal?.kcalAdjust > 0 ? '+' : ''}{currentGoal?.kcalAdjust} kcal)</span>
+                  <span className="text-brand-green font-bold">= {currentTarget} kcal</span>
+                </div>
+              </div>
             </div>
           )}
         </div>
       )}
 
-      {/* GREUTATE */}
+      {/* Weight chart */}
       <div className="card">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-white">⚖️ Greutate</h2>
-          <button onClick={() => setShowWeightModal(true)}
-            className="text-xs bg-brand-green/20 text-brand-green px-2.5 py-1 rounded-lg hover:bg-brand-green/30">+ Adaugă</button>
+          <button onClick={() => setShowWeightModal(true)} className="text-xs bg-brand-green/20 text-brand-green px-3 py-1.5 rounded-xl">+ Adaugă</button>
         </div>
-        {weights.length > 0 && (
-          <div className="grid grid-cols-3 gap-2 mb-3">
+        {weights.length >= 2 && (
+          <div className="grid grid-cols-3 gap-2 text-center mb-3">
             {[
-              { label: 'Curent', value: `${latestWeight} kg`, color: 'text-white' },
+              { label: 'Curent', value: `${weights[0].weight_kg} kg`, color: 'text-white' },
               { label: 'Minim', value: `${Math.min(...weights.map(w => w.weight_kg))} kg`, color: 'text-brand-green' },
               { label: 'Schimbare', value: weightChange !== null ? `${parseFloat(weightChange) > 0 ? '+' : ''}${weightChange} kg` : '—', color: parseFloat(weightChange) < 0 ? 'text-brand-green' : parseFloat(weightChange) > 0 ? 'text-red-400' : 'text-slate-300' },
             ].map(s => (
-              <div key={s.label} className="bg-dark-700 rounded-xl p-2 text-center">
-                <p className={`text-sm font-bold ${s.color}`}>{s.value}</p>
+              <div key={s.label} className="bg-dark-700 rounded-xl p-2">
+                <p className={`text-base font-bold ${s.color}`}>{s.value}</p>
                 <p className="text-xs text-slate-500">{s.label}</p>
               </div>
             ))}
           </div>
         )}
-        {chartData.length > 1 && (
+        {chartData.length >= 2 && (
           <ResponsiveContainer width="100%" height={120}>
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#2e2e42" />
               <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#64748b', fontSize: 10 }} domain={['dataMin - 1', 'dataMax + 1']} />
-              <Tooltip contentStyle={tooltipStyle} />
-              <Line type="monotone" dataKey="kg" stroke="#a78bfa" strokeWidth={2} dot={{ fill: '#a78bfa', r: 3 }} name="kg" />
+              <YAxis tick={{ fill: '#64748b', fontSize: 10 }} domain={['auto', 'auto']} />
+              <Tooltip contentStyle={{ background: '#1a1a24', border: '1px solid #2e2e42', borderRadius: 12, fontSize: 12 }} />
+              <Line type="monotone" dataKey="kg" stroke="#4ade80" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         )}
@@ -275,8 +346,8 @@ export default function Profil({ session, isAdmin }) {
           <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
             {weights.map(w => (
               <div key={w.id} className="flex items-center justify-between bg-dark-700 rounded-xl px-3 py-2">
-                <span className="text-sm text-white">{w.weight_kg} kg</span>
-                <span className="text-xs text-slate-400">{new Date(w.date + 'T12:00:00').toLocaleDateString('ro-RO')}</span>
+                <span className="text-sm font-medium text-white">{w.weight_kg} kg</span>
+                <span className="text-xs text-slate-400 text-center flex-1">{new Date(w.date + 'T12:00:00').toLocaleDateString('ro-RO')}</span>
                 <button onClick={() => deleteWeight(w.id)} className="text-slate-600 hover:text-red-400 ml-2">×</button>
               </div>
             ))}
@@ -284,17 +355,33 @@ export default function Profil({ session, isAdmin }) {
         )}
       </div>
 
-      {/* SETĂRI RAPIDE */}
-      <div className="card space-y-3">
+      {/* SETĂRI */}
+      <div className="card space-y-4">
         <h2 className="text-sm font-semibold text-white">⚙️ Setări</h2>
         <StravaCard session={session} />
+
+        {/* Theme selector */}
         <div className="border-t border-dark-600 pt-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-white">📱 Instalează aplicația</p>
-              <p className="text-xs text-slate-500">Safari → Share → Adaugă pe ecranul principal</p>
-            </div>
+          <p className="text-sm font-medium text-white mb-2">🎨 Temă culori</p>
+          <div className="grid grid-cols-2 gap-2">
+            {THEMES.map(t => (
+              <button key={t.key} onClick={() => { applyTheme(t.key); setActiveTheme(t.key) }}
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border transition-all ${activeTheme === t.key ? 'border-brand-green bg-brand-green/10' : 'border-dark-600 bg-dark-700 hover:bg-dark-600'}`}>
+                <div className="flex gap-1">
+                  {t.preview.map((c, i) => <div key={i} className="w-4 h-4 rounded-full" style={{ backgroundColor: c }} />)}
+                </div>
+                <span className={`text-xs font-medium ${activeTheme === t.key ? 'text-brand-green' : 'text-slate-300'}`}>{t.label}</span>
+                {activeTheme === t.key && <span className="text-brand-green text-xs ml-auto">✓</span>}
+              </button>
+            ))}
           </div>
+          <p className="text-xs text-slate-600 mt-2">* Tema Dark e cea standard. Restul sunt experimentale.</p>
+        </div>
+
+        {/* Install */}
+        <div className="border-t border-dark-600 pt-3">
+          <p className="text-sm font-medium text-white">📱 Instalează aplicația</p>
+          <p className="text-xs text-slate-500">Safari → Share → Adaugă pe ecranul principal</p>
         </div>
       </div>
 
@@ -306,14 +393,11 @@ export default function Profil({ session, isAdmin }) {
       {/* ─── EDIT PROFIL MODAL ─── */}
       <Modal open={showEditProfile} onClose={() => setShowEditProfile(false)} title="Editează profil">
         <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
-          {/* Nume */}
           <div>
             <label className="text-xs text-slate-400 block mb-1">Nume afișat</label>
             <input className="input" placeholder="ex: Alex" value={ep.full_name || ''}
               onChange={e => setEditProfile(p => ({ ...p, full_name: e.target.value }))} />
           </div>
-
-          {/* Gen */}
           <div>
             <label className="text-xs text-slate-400 block mb-1">Gen</label>
             <div className="flex gap-2">
@@ -325,23 +409,15 @@ export default function Profil({ session, isAdmin }) {
               ))}
             </div>
           </div>
-
-          {/* Date fizice */}
           <div className="grid grid-cols-2 gap-3">
-            {[
-              { key: 'age', label: 'Vârstă', unit: 'ani', placeholder: '25' },
-              { key: 'height_cm', label: 'Înălțime', unit: 'cm', placeholder: '170' },
-            ].map(f => (
+            {[{ key: 'age', label: 'Vârstă', unit: 'ani', placeholder: '25' }, { key: 'height_cm', label: 'Înălțime', unit: 'cm', placeholder: '170' }].map(f => (
               <div key={f.key}>
                 <label className="text-xs text-slate-400 block mb-1">{f.label} ({f.unit})</label>
-                <input className="input" type="number" placeholder={f.placeholder}
-                  value={ep[f.key] || ''}
+                <input className="input" type="number" placeholder={f.placeholder} value={ep[f.key] || ''}
                   onChange={e => setEditProfile(p => ({ ...p, [f.key]: parseFloat(e.target.value) || '' }))} />
               </div>
             ))}
           </div>
-
-          {/* Activitate */}
           <div>
             <label className="text-xs text-slate-400 block mb-1">Nivel de activitate</label>
             <div className="space-y-1.5">
@@ -354,8 +430,6 @@ export default function Profil({ session, isAdmin }) {
               ))}
             </div>
           </div>
-
-          {/* Obiectiv */}
           <div>
             <label className="text-xs text-slate-400 block mb-1">Obiectiv</label>
             <div className="flex gap-2">
@@ -367,26 +441,20 @@ export default function Profil({ session, isAdmin }) {
               ))}
             </div>
           </div>
-
-          {/* Macros */}
           {bmr > 0 && (
             <div className="bg-dark-700 rounded-xl p-3 space-y-3">
               <div className="flex justify-between items-center">
                 <p className="text-xs font-semibold text-white">Macronutrienți</p>
-                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${macroOk ? 'bg-brand-green/20 text-brand-green' : 'bg-red-500/20 text-red-400'}`}>
-                  {macroTotal}%
-                </span>
+                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${macroOk ? 'bg-brand-green/20 text-brand-green' : 'bg-red-500/20 text-red-400'}`}>{macroTotal}%</span>
               </div>
               <MacroSlider label="Proteine" emoji="💪" colorClass="text-brand-blue" colorHex="#60a5fa" value={macroP} onChange={setProtein} />
               <MacroSlider label="Carbohidrați" emoji="🌾" colorClass="text-brand-orange" colorHex="#fb923c" value={macroC} onChange={setCarbs} />
               <MacroSlider label="Grăsimi" emoji="🥑" colorClass="text-brand-purple" colorHex="#a78bfa" value={macroF} onChange={setFat} />
-
               <div className="flex h-1.5 rounded-full overflow-hidden">
                 <div className="bg-brand-blue transition-all" style={{ width: `${macroP}%` }} />
                 <div className="bg-brand-orange transition-all" style={{ width: `${macroC}%` }} />
                 <div className="bg-brand-purple transition-all" style={{ width: `${macroF}%` }} />
               </div>
-
               <div className="grid grid-cols-4 gap-1 text-center">
                 {[
                   { label: 'kcal', value: targetKcal, color: 'text-brand-green' },
@@ -394,19 +462,36 @@ export default function Profil({ session, isAdmin }) {
                   { label: 'carb.', value: `${Math.round((targetKcal * macroC / 100) / 4)}g`, color: 'text-brand-orange' },
                   { label: 'grăs.', value: `${Math.round((targetKcal * macroF / 100) / 9)}g`, color: 'text-brand-purple' },
                 ].map(s => (
-                  <div key={s.label}>
-                    <p className={`text-sm font-bold ${s.color}`}>{s.value}</p>
-                    <p className="text-xs text-slate-500">{s.label}</p>
-                  </div>
+                  <div key={s.label}><p className={`text-sm font-bold ${s.color}`}>{s.value}</p><p className="text-xs text-slate-500">{s.label}</p></div>
                 ))}
               </div>
             </div>
           )}
-
-          <button onClick={saveProfileAndTargets} disabled={saving || (!macroOk && bmr > 0)}
-            className="btn-primary w-full py-3">
+          <button onClick={saveProfileAndTargets} disabled={saving || (!macroOk && bmr > 0)} className="btn-primary w-full py-3">
             {saved ? '✅ Salvat!' : saving ? 'Se salvează...' : 'Salvează'}
           </button>
+        </div>
+      </Modal>
+
+      {/* Water target modal */}
+      <Modal open={showWaterModal} onClose={() => setShowWaterModal(false)} title="💧 Target apă zilnic">
+        <div className="space-y-3">
+          <p className="text-xs text-slate-400">Recomandare: ~35ml × greutatea ta corporală</p>
+          {latestWeight && <p className="text-xs text-brand-blue">Pentru {latestWeight}kg → {Math.round(latestWeight * 35)}ml recomandat</p>}
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">Target (ml/zi)</label>
+            <input className="input" type="number" step="100" value={waterTarget}
+              onChange={e => setWaterTarget(parseInt(e.target.value) || 2000)} autoFocus />
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {[1500, 2000, 2500, 3000, 3500].map(v => (
+              <button key={v} onClick={() => setWaterTarget(v)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${waterTarget === v ? 'bg-brand-blue/20 text-brand-blue border border-brand-blue/40' : 'bg-dark-700 text-slate-400'}`}>
+                {v}ml
+              </button>
+            ))}
+          </div>
+          <button onClick={saveWaterTarget} className="btn-primary w-full py-3">Salvează</button>
         </div>
       </Modal>
 

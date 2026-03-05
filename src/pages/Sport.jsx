@@ -89,7 +89,7 @@ function AlergareTab({ session }) {
   const today = getToday()
   const [runs, setRuns] = useState([])
   const [showModal, setShowModal] = useState(false)
-  const [form, setForm] = useState({ date: today, distance_km: '', duration_min: '', notes: '' })
+  const [form, setForm] = useState({ date: today, distance_km: '', duration_min: '', notes: '', start_time: '' })
   const [loading, setLoading] = useState(true)
   const { syncing, syncMsg, stravaConnected, syncStrava } = useStravaSync(session, loadRuns)
 
@@ -111,9 +111,10 @@ function AlergareTab({ session }) {
       distance_km: parseFloat(form.distance_km),
       duration_min: parseFloat(form.duration_min),
       notes: form.notes,
+      start_time: form.start_time || null,
     })
     setShowModal(false)
-    setForm({ date: today, distance_km: '', duration_min: '', notes: '' })
+    setForm({ date: today, distance_km: '', duration_min: '', notes: '', start_time: '' })
     loadRuns()
   }
 
@@ -208,6 +209,7 @@ function AlergareTab({ session }) {
         <div className="space-y-3">
           {[
             { key: 'date', label: 'Data', type: 'date' },
+            { key: 'start_time', label: 'Ora start (opțional)', type: 'time' },
             { key: 'distance_km', label: 'Distanță (km)', type: 'number', placeholder: '5.0' },
             { key: 'duration_min', label: 'Durată (minute)', type: 'number', placeholder: '30' },
             { key: 'notes', label: 'Notițe (opțional)', type: 'text', placeholder: 'ex: Interval training' },
@@ -231,7 +233,7 @@ function FortaTab({ session }) {
   const today = getToday()
   const [workouts, setWorkouts] = useState([])
   const [showModal, setShowModal] = useState(false)
-  const [form, setForm] = useState({ date: today, name: '', notes: '' })
+  const [form, setForm] = useState({ date: today, name: '', notes: '', start_time: '' })
   const [exercises, setExercises] = useState([{ exercise_name: '', sets: '3', reps: '10', weight_kg: '0' }])
   const [loading, setLoading] = useState(true)
   const { syncing, syncMsg, stravaConnected, syncStrava } = useStravaSync(session, loadWorkouts)
@@ -264,7 +266,7 @@ function FortaTab({ session }) {
   async function saveWorkout() {
     if (!form.name) return
     const { data: wl } = await supabase.from('workout_logs').insert({
-      user_id: session.user.id, date: form.date, name: form.name, type: 'strength', notes: form.notes
+      user_id: session.user.id, date: form.date, name: form.name, type: 'strength', notes: form.notes, start_time: form.start_time || null
     }).select().single()
 
     const validExercises = exercises.filter(e => e.exercise_name.trim())
@@ -356,6 +358,11 @@ function FortaTab({ session }) {
               <label className="text-xs text-slate-400 block mb-1">Data</label>
               <input className="input" type="date" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} />
             </div>
+          </div>
+
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">Ora start (opțional)</label>
+            <input className="input" type="time" value={form.start_time} onChange={e => setForm(p => ({ ...p, start_time: e.target.value }))} />
           </div>
 
           <div>

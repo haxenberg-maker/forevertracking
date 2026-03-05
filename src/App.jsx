@@ -8,7 +8,7 @@ import Nutritie from './pages/Nutritie'
 import Sport from './pages/Sport'
 import Profil from './pages/Profil'
 import StravaCallback from './pages/StravaCallback'
-import Onboarding from './pages/Onboarding'
+import Camara from './pages/Camara'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -65,6 +65,7 @@ export default function App() {
           <Route path="/" element={<><Dashboard session={session} isAdmin={isAdmin} /><Footer /></>} />
           <Route path="/nutritie" element={<><Nutritie session={session} isAdmin={isAdmin} /><Footer /></>} />
           <Route path="/sport" element={<><Sport session={session} /><Footer /></>} />
+          <Route path="/camara" element={<><Camara session={session} /><Footer /></>} />
           <Route path="/profil" element={<><Profil session={session} isAdmin={isAdmin} /><Footer /></>} />
         </Routes>
       </div>
