@@ -9,6 +9,143 @@ function getToday() {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
 
+// ─── SHOPPING LIST CARD ───────────────────────────────
+
+function ShoppingListCard({ session }) {
+  const navigate = useNavigate()
+  const [items, setItems] = useState([])
+  const [showAddFood, setShowAddFood] = useState(false)
+  const [selectedItem, setSelectedItem] = useState(null)
+  const [foodForm, setFoodForm] = useState({ calories: '', protein: '', carbs: '', fat: '' })
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { load() }, [])
+
+  async function load() {
+    const { data } = await supabase.from('pantry_items')
+      .select('*').eq('user_id', session.user.id).eq('list_type', 'shopping')
+      .order('created_at', { ascending: false })
+    setItems(data || [])
+  }
+
+  async function check(item) {
+    // If has nutritional info → open add-to-foods modal
+    if (!item.calories) {
+      setSelectedItem(item)
+      setFoodForm({ calories: '', protein: '', carbs: '', fat: '' })
+      setShowAddFood(true)
+    } else {
+      await moveToStock(item)
+    }
+  }
+
+  async function moveToStock(item) {
+    console.log('Dashboard moveToStock:', item.id, item.name)
+    const { data, error } = await supabase.from('pantry_items')
+      .update({ list_type: 'stock', checked: false })
+      .eq('id', item.id).eq('user_id', session.user.id).select()
+    console.log('Dashboard moveToStock result:', { data, error })
+    if (error) { alert('Eroare: ' + error.message); return }
+    if (!data || data.length === 0) { alert('Update fără efect — verifică SQL:\nALTER TABLE pantry_items ENABLE ROW LEVEL SECURITY;\nDROP POLICY IF EXISTS "own pantry" ON pantry_items;\nCREATE POLICY "own pantry" ON pantry_items FOR ALL USING (auth.uid() = user_id);'); return }
+    if (item.calories) {
+      await supabase.from('foods').upsert({
+        user_id: session.user.id, user_email: session.user.email,
+        name: item.name, calories: item.calories || 0,
+        protein: item.protein || 0, carbs: item.carbs || 0, fat: item.fat || 0,
+      }, { onConflict: 'name', ignoreDuplicates: true })
+    }
+    load()
+  }
+
+  async function saveAndMove() {
+    if (!selectedItem) return
+    setSaving(true)
+    const cal = parseFloat(foodForm.calories) || 0
+    const { data, error } = await supabase.from('pantry_items').update({
+      calories: cal, protein: parseFloat(foodForm.protein) || 0,
+      carbs: parseFloat(foodForm.carbs) || 0, fat: parseFloat(foodForm.fat) || 0,
+      list_type: 'stock',
+    }).eq('id', selectedItem.id).eq('user_id', session.user.id).select()
+    console.log('Dashboard saveAndMove result:', { data, error })
+    if (error) { alert('Eroare: ' + error.message); setSaving(false); return }
+    if (cal > 0) {
+      await supabase.from('foods').insert({
+        user_id: session.user.id, user_email: session.user.email,
+        name: selectedItem.name, calories: cal,
+        protein: parseFloat(foodForm.protein) || 0,
+        carbs: parseFloat(foodForm.carbs) || 0,
+        fat: parseFloat(foodForm.fat) || 0,
+      })
+    }
+    setSaving(false); setShowAddFood(false); setSelectedItem(null); load()
+  }
+
+  if (items.length === 0) return null
+
+  return (
+    <div className="card mt-3">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xl">🛒</span>
+          <div>
+            <p className="text-sm font-semibold text-white">Lista de cumpărături</p>
+            <p className="text-xs text-slate-400">{items.length} produse</p>
+          </div>
+        </div>
+        <button onClick={() => navigate('/camara')} className="text-xs text-brand-green">→ Cămară</button>
+      </div>
+
+      <div className="space-y-2">
+        {items.slice(0, 5).map(item => (
+          <button key={item.id} onClick={() => check(item)}
+            className="w-full flex items-center gap-3 bg-dark-700 hover:bg-dark-600 rounded-xl px-3 py-2.5 transition-all text-left">
+            <div className="w-5 h-5 rounded-full border-2 border-slate-600 hover:border-brand-green shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm text-white">{item.name}</p>
+              {item.quantity > 0 && <p className="text-xs text-slate-500">{item.quantity} {item.unit}</p>}
+            </div>
+            {!item.calories && <span className="text-xs text-slate-600">+ info</span>}
+          </button>
+        ))}
+        {items.length > 5 && (
+          <button onClick={() => navigate('/camara')} className="w-full text-xs text-slate-500 hover:text-slate-300 py-1.5 text-center">
+            + {items.length - 5} produse → Cămară
+          </button>
+        )}
+      </div>
+
+      <Modal open={showAddFood} onClose={() => setShowAddFood(false)} title={`🛒 ${selectedItem?.name || ''}`}>
+        <div className="space-y-3">
+          <p className="text-xs text-slate-400">Adaugă valorile nutriționale pentru a salva în Alimente:</p>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { k: 'calories', l: 'Calorii (kcal/100g)' },
+              { k: 'protein', l: 'Proteine (g/100g)' },
+              { k: 'carbs', l: 'Carbohidrați (g/100g)' },
+              { k: 'fat', l: 'Grăsimi (g/100g)' },
+            ].map(f => (
+              <div key={f.k}>
+                <label className="text-xs text-slate-500 block mb-1">{f.l}</label>
+                <input className="input" type="number" placeholder="0" value={foodForm[f.k]}
+                  onChange={e => setFoodForm(p => ({ ...p, [f.k]: e.target.value }))} />
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => moveToStock(selectedItem).then(() => setShowAddFood(false))}
+              className="btn-ghost flex-1 py-3 text-sm">Sară peste</button>
+            <button onClick={saveAndMove} disabled={saving || !foodForm.calories}
+              className="btn-primary flex-1 py-3 disabled:opacity-50">
+              {saving ? 'Se salvează...' : 'Salvează → Alimente'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  )
+}
+
+
 const dayNames = ['Duminică','Luni','Marți','Miercuri','Joi','Vineri','Sâmbătă']
 const monthNames = ['ian','feb','mar','apr','mai','iun','iul','aug','sep','oct','nov','dec']
 const TYPE_ICON = { running: '🏃', strength: '🏋️', cycling: '🚴', other: '⚡' }
@@ -544,6 +681,9 @@ export default function Dashboard({ session, isAdmin }) {
 
       {/* Supplements */}
       <div className="mb-3"><SupplementsCard session={session} /></div>
+
+      {/* Shopping List */}
+      <ShoppingListCard session={session} />
     </div>
   )
 }
