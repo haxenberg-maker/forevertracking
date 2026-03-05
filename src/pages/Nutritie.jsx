@@ -366,9 +366,9 @@ function MeseTab({ session, isAdmin }) {
     setLoading(false)
   }
 
-  function openAdd() { setForm({ name: '' }); setItems([{ food_id: '', food: null, quantity_g: '100' }]); setEditTemplate(null); setShowModal(true) }
+  function openAdd() { setForm({ name: '', is_public: false }); setItems([{ food_id: '', food: null, quantity_g: '100' }]); setEditTemplate(null); setShowModal(true) }
   function openEdit(t) {
-    setForm({ name: t.name })
+    setForm({ name: t.name, is_public: t.is_public || false })
     setItems(t.meal_template_items.map(i => ({ food_id: i.foods.id, food: i.foods, quantity_g: String(i.quantity_g) })))
     setEditTemplate(t); setShowModal(true)
   }
@@ -383,10 +383,10 @@ function MeseTab({ session, isAdmin }) {
     if (!validItems.length) return
     if (editTemplate) {
       await supabase.from('meal_template_items').delete().eq('meal_template_id', editTemplate.id)
-      await supabase.from('meal_templates').update({ name: form.name }).eq('id', editTemplate.id)
+      await supabase.from('meal_templates').update({ name: form.name, is_public: form.is_public }).eq('id', editTemplate.id)
       await supabase.from('meal_template_items').insert(validItems.map(i => ({ meal_template_id: editTemplate.id, food_id: i.food_id, quantity_g: parseFloat(i.quantity_g) })))
     } else {
-      const { data: tmpl } = await supabase.from('meal_templates').insert({ user_id: session.user.id, name: form.name }).select().single()
+      const { data: tmpl } = await supabase.from('meal_templates').insert({ user_id: session.user.id, name: form.name, is_public: form.is_public }).select().single()
       await supabase.from('meal_template_items').insert(validItems.map(i => ({ meal_template_id: tmpl.id, food_id: i.food_id, quantity_g: parseFloat(i.quantity_g) })))
     }
     setShowModal(false); loadAll()
@@ -508,6 +508,22 @@ function MeseTab({ session, isAdmin }) {
                 Total: {Math.round(calcNutr(items.filter(i => i.food).map(i => ({ quantity_g: parseFloat(i.quantity_g) || 0, foods: i.food }))).calories)} kcal
               </div>
             )}
+            {/* Public / Privat toggle */}
+            <button onClick={() => setForm(p => ({ ...p, is_public: !p.is_public }))}
+              className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${form.is_public ? 'bg-brand-blue/10 border-brand-blue/40' : 'bg-dark-700 border-dark-600'}`}>
+              <div className="flex items-center gap-2">
+                <span>{form.is_public ? '🌍' : '🔒'}</span>
+                <div className="text-left">
+                  <p className={`text-sm font-medium ${form.is_public ? 'text-brand-blue' : 'text-slate-300'}`}>
+                    {form.is_public ? 'Publică' : 'Privată'}
+                  </p>
+                  <p className="text-xs text-slate-500">{form.is_public ? 'Vizibilă tuturor utilizatorilor' : 'Vizibilă doar ție'}</p>
+                </div>
+              </div>
+              <div className={`w-10 h-5 rounded-full transition-all ${form.is_public ? 'bg-brand-blue' : 'bg-dark-600'}`}>
+                <div className={`w-4 h-4 bg-white rounded-full mt-0.5 transition-all ${form.is_public ? 'ml-5.5' : 'ml-0.5'}`} style={{ marginLeft: form.is_public ? '22px' : '2px' }} />
+              </div>
+            </button>
             <button onClick={saveTemplate} disabled={!form.name || !items.filter(i => i.food_id).length} className="btn-primary w-full py-3">
               {editTemplate ? 'Salvează' : 'Creează masa'}
             </button>
@@ -718,10 +734,9 @@ function TargeturiTab({ session }) {
 export default function Nutritie({ session, isAdmin }) {
   const [tab, setTab] = useState('azi')
   const tabs = [
-    { key: 'azi',     label: '📅 Azi' },
-    { key: 'mese',    label: '🍽️ Mese' },
-    { key: 'alimente',label: '🥦 Alimente' },
-    { key: 'targete', label: '🎯 Target-uri' },
+    { key: 'azi',      label: '📅 Azi' },
+    { key: 'mese',     label: '🍽️ Mese' },
+    { key: 'alimente', label: '🥦 Alimente' },
   ]
   return (
     <div className="page fade-in">
@@ -737,7 +752,6 @@ export default function Nutritie({ session, isAdmin }) {
       {tab === 'azi'      && <AziTab session={session} />}
       {tab === 'mese'     && <MeseTab session={session} isAdmin={isAdmin} />}
       {tab === 'alimente' && <AlimenteTab session={session} isAdmin={isAdmin} />}
-      {tab === 'targete'  && <TargeturiTab session={session} />}
     </div>
   )
 }
