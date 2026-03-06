@@ -295,8 +295,9 @@ function SupplementsCard({ session }) {
   const [logs, setLogs] = useState({})
   const [showManage, setShowManage] = useState(false)
   const [showAddForm, setShowAddForm] = useState(false)
-  const [form, setForm] = useState({ name: '', amount_g: '', unit: 'g' })
+  const [form, setForm] = useState({ name: '', amount_g: '', unit: 'g', calories: '', protein_g: '', carbs_g: '', fat_g: '' })
   const [editItem, setEditItem] = useState(null)
+  const [showMacros, setShowMacros] = useState(false)
   const UNITS = ['g', 'mg', 'ml', 'capsule', 'tabletă', 'linguriță']
 
   useEffect(() => { loadAll() }, [])
@@ -326,18 +327,32 @@ function SupplementsCard({ session }) {
 
   async function saveSupplement() {
     if (!form.name) return
-    const data = { user_id: session.user.id, name: form.name, amount_g: parseFloat(form.amount_g) || 0, unit: form.unit }
+    const data = {
+      user_id: session.user.id,
+      name: form.name,
+      amount_g: parseFloat(form.amount_g) || 0,
+      unit: form.unit,
+      calories:  parseFloat(form.calories)  || 0,
+      protein_g: parseFloat(form.protein_g) || 0,
+      carbs_g:   parseFloat(form.carbs_g)   || 0,
+      fat_g:     parseFloat(form.fat_g)     || 0,
+    }
     if (editItem) await supabase.from('daily_supplements').update(data).eq('id', editItem.id)
     else await supabase.from('daily_supplements').insert(data)
-    setForm({ name: '', amount_g: '', unit: 'g' }); setShowAddForm(false); setEditItem(null); loadAll()
+    setForm({ name: '', amount_g: '', unit: 'g', calories: '', protein_g: '', carbs_g: '', fat_g: '' })
+    setShowAddForm(false); setEditItem(null); setShowMacros(false); loadAll()
   }
 
   async function deleteSupplement(id) {
     if (confirm('Ștergi suplimentul?')) { await supabase.from('daily_supplements').delete().eq('id', id); loadAll() }
   }
 
-  function openEdit(s) { setForm({ name: s.name, amount_g: String(s.amount_g), unit: s.unit }); setEditItem(s); setShowAddForm(true) }
-  function closeManage() { setShowManage(false); setShowAddForm(false); setEditItem(null); setForm({ name: '', amount_g: '', unit: 'g' }) }
+  function openEdit(s) {
+    setForm({ name: s.name, amount_g: String(s.amount_g), unit: s.unit, calories: String(s.calories || ''), protein_g: String(s.protein_g || ''), carbs_g: String(s.carbs_g || ''), fat_g: String(s.fat_g || '') })
+    setEditItem(s); setShowAddForm(true)
+    setShowMacros(!!(s.calories || s.protein_g || s.carbs_g || s.fat_g))
+  }
+  function closeManage() { setShowManage(false); setShowAddForm(false); setEditItem(null); setForm({ name: '', amount_g: '', unit: 'g', calories: '', protein_g: '', carbs_g: '', fat_g: '' }); setShowMacros(false) }
   const takenCount = supplements.filter(s => logs[s.id]?.taken).length
 
   const modal = (
@@ -378,8 +393,33 @@ function SupplementsCard({ session }) {
               </select>
             </div>
           </div>
+          {/* Optional macros */}
+          <button onClick={() => setShowMacros(p => !p)}
+            className="w-full text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1.5 py-1 transition-colors">
+            <span>{showMacros ? '▾' : '▸'}</span>
+            <span>Macronutrienți opționali (calorii, proteine etc.)</span>
+          </button>
+          {showMacros && (
+            <div className="bg-dark-700 rounded-xl p-3 space-y-2">
+              <p className="text-xs text-slate-500">Valorile per doză (per cantitate de mai sus)</p>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { k: 'calories',  l: '🔥 Calorii (kcal)' },
+                  { k: 'protein_g', l: '💪 Proteine (g)' },
+                  { k: 'carbs_g',   l: '🌾 Carbohidrați (g)' },
+                  { k: 'fat_g',     l: '🥑 Grăsimi (g)' },
+                ].map(f => (
+                  <div key={f.k}>
+                    <label className="text-xs text-slate-400 block mb-1">{f.l}</label>
+                    <input className="input" type="number" step="0.1" placeholder="0"
+                      value={form[f.k]} onChange={e => setForm(p => ({ ...p, [f.k]: e.target.value }))} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex gap-2">
-            <button onClick={() => { setShowAddForm(false); setEditItem(null) }} className="btn-ghost flex-1 py-3">← Înapoi</button>
+            <button onClick={() => { setShowAddForm(false); setEditItem(null); setShowMacros(false) }} className="btn-ghost flex-1 py-3">← Înapoi</button>
             <button onClick={saveSupplement} className="btn-primary flex-1 py-3">{editItem ? 'Salvează' : 'Adaugă'}</button>
           </div>
         </div>
@@ -419,7 +459,7 @@ function SupplementsCard({ session }) {
               </div>
               <div className="flex-1">
                 <p className={`text-sm font-medium ${taken ? 'text-brand-green' : 'text-slate-200'}`}>{s.name}</p>
-                <p className="text-xs text-slate-500">{s.amount_g} {s.unit}</p>
+                <p className="text-xs text-slate-500">{s.amount_g} {s.unit}{s.calories > 0 ? ` · ${s.calories} kcal` : ''}</p>
               </div>
             </button>
           )

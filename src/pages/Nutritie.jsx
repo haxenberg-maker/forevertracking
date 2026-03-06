@@ -49,12 +49,14 @@ function AziTab({ session }) {
   const [selectedTemplate, setSelectedTemplate] = useState(null)
   const [quantity, setQuantity] = useState('100')
   const [unit, setUnit] = useState('g')
+  const [mealPct, setMealPct] = useState(100)  // % din masă mâncată
   const [search, setSearch] = useState('')
   const [pickingFood, setPickingFood] = useState(false)
   const [pickingTemplate, setPickingTemplate] = useState(false)
   const [editingItem, setEditingItem] = useState(null)
   const [editQty, setEditQty] = useState('')
   const [collapsed, setCollapsed] = useState({})
+  const [takenSupplements, setTakenSupplements] = useState([]) // supplements taken today
 
   useEffect(() => { loadAll() }, [])
 
@@ -66,6 +68,15 @@ function AziTab({ session }) {
     setPantryItems(pantry || [])
     const { data: templates } = await supabase.from('meal_templates').select(`id, name, meal_template_items(quantity_g, foods(id, name, calories, protein, carbs, fat))`).order('name')
     setMealTemplates(templates || [])
+    // Load supplements taken today (with macro info)
+    const { data: sups } = await supabase.from('daily_supplements').select('*').eq('user_id', session.user.id)
+    if (sups?.length) {
+      const { data: logs } = await supabase.from('supplement_logs').select('*').eq('user_id', session.user.id).eq('date', today).eq('taken', true)
+      const takenIds = new Set((logs || []).map(l => l.supplement_id))
+      setTakenSupplements((sups || []).filter(s => takenIds.has(s.id) && (s.calories > 0 || s.protein_g > 0 || s.carbs_g > 0 || s.fat_g > 0)))
+    } else {
+      setTakenSupplements([])
+    }
   }
 
   async function loadMeals() {
@@ -98,8 +109,8 @@ function AziTab({ session }) {
       const { data } = await supabase.from('meal_logs').insert({ user_id: session.user.id, date: today, meal_type: activeMealType }).select().single()
       mealLog = data
     }
-    const qg = toGrams(quantity, unit, selectedFood)
-    await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: selectedFood.id, quantity_g: qg, group_id: null, group_name: null })
+    const qg = toGrams(quantity, unit, selectedFood) * (mealPct / 100)
+    await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: selectedFood.id, quantity_g: Math.round(qg * 10) / 10, group_id: null, group_name: null })
     closeAddModal(); loadMeals()
   }
 
@@ -127,7 +138,7 @@ function AziTab({ session }) {
 
   function closeAddModal() {
     setShowAddModal(false); setSelectedFood(null); setSelectedTemplate(null)
-    setQuantity('100'); setUnit('g'); setSearch(''); setPickingFood(false); setPickingTemplate(false); setAddMode('food')
+    setQuantity('100'); setUnit('g'); setMealPct(100); setSearch(''); setPickingFood(false); setPickingTemplate(false); setAddMode('food')
   }
 
   function groupItems(items) {
@@ -140,10 +151,24 @@ function AziTab({ session }) {
     return { ungrouped, groups }
   }
 
-  const totalNutrition = meals.reduce((acc, m) => {
+  const mealNutrition = meals.reduce((acc, m) => {
     const n = calcNutr(m.meal_items || [])
     return { calories: acc.calories + n.calories, protein: acc.protein + n.protein, carbs: acc.carbs + n.carbs, fat: acc.fat + n.fat }
   }, { calories: 0, protein: 0, carbs: 0, fat: 0 })
+
+  const supNutrition = takenSupplements.reduce((acc, s) => ({
+    calories: acc.calories + (s.calories || 0),
+    protein:  acc.protein  + (s.protein_g || 0),
+    carbs:    acc.carbs    + (s.carbs_g || 0),
+    fat:      acc.fat      + (s.fat_g || 0),
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0 })
+
+  const totalNutrition = {
+    calories: mealNutrition.calories + supNutrition.calories,
+    protein:  mealNutrition.protein  + supNutrition.protein,
+    carbs:    mealNutrition.carbs    + supNutrition.carbs,
+    fat:      mealNutrition.fat      + supNutrition.fat,
+  }
 
   const pantrySuggestions = search.length > 1
     ? pantryItems.filter(p => p.name.toLowerCase().includes(search.toLowerCase())).slice(0, 5)
@@ -243,6 +268,39 @@ function AziTab({ session }) {
         )
       })}
 
+      })}\n
+      {/* Suplimente luate azi cu macronutrienți */}
+      {takenSupplements.length > 0 && (
+        <div className="card">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-lg">💊</span>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-white">Suplimente</p>
+              <p className="text-xs text-slate-500">Luate azi · contribuie la total</p>
+            </div>
+            <span className="text-xs text-slate-500">
+              {Math.round(supNutrition.calories)} kcal
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {takenSupplements.map(s => (
+              <div key={s.id} className="flex items-center justify-between bg-dark-700 rounded-xl px-3 py-2">
+                <div>
+                  <p className="text-xs font-medium text-brand-green">✓ {s.name}</p>
+                  <p className="text-xs text-slate-500">{s.amount_g} {s.unit}</p>
+                </div>
+                <div className="text-right text-xs text-slate-400">
+                  {s.calories > 0 && <span>{s.calories} kcal</span>}
+                  {s.protein_g > 0 && <span className="ml-1.5 text-brand-blue">P:{s.protein_g}g</span>}
+                  {s.carbs_g > 0 && <span className="ml-1.5 text-brand-orange">C:{s.carbs_g}g</span>}
+                  {s.fat_g > 0 && <span className="ml-1.5 text-brand-purple">G:{s.fat_g}g</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <Modal open={showAddModal} onClose={closeAddModal} title={`Adaugă la ${MEAL_TYPES.find(m => m.key === activeMealType)?.label || ''}`}>
         {!pickingFood && !pickingTemplate && (
           <div className="space-y-3">
@@ -274,6 +332,25 @@ function AziTab({ session }) {
                       </div>
                       {unit !== 'g' && unit !== 'ml' && (
                         <p className="text-xs text-slate-500 mt-1">≈ {Math.round(toGrams(quantity, unit, selectedFood))}g</p>
+                      )}
+                    </div>
+                    {/* % din masă */}
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="text-xs text-slate-400">Cât ai mâncat din porție?</label>
+                        <span className="text-sm font-bold text-brand-green">{mealPct}%</span>
+                      </div>
+                      <input type="range" min={10} max={100} step={5} value={mealPct}
+                        onChange={e => setMealPct(parseInt(e.target.value))}
+                        className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+                        style={{ accentColor: '#4ade80' }} />
+                      <div className="flex justify-between text-[10px] text-slate-600 mt-0.5">
+                        <span>10%</span><span>50%</span><span>100%</span>
+                      </div>
+                      {mealPct < 100 && (
+                        <p className="text-xs text-brand-orange mt-1">
+                          ≈ {Math.round(toGrams(quantity, unit, selectedFood) * mealPct / 100)}g · {Math.round((selectedFood.calories || 0) * toGrams(quantity, unit, selectedFood) * mealPct / 10000)} kcal
+                        </p>
                       )}
                     </div>
                   </div>
