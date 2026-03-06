@@ -16,10 +16,16 @@ function ShoppingListCard({ session }) {
   const [items, setItems] = useState([])
   const [showAddFood, setShowAddFood] = useState(false)
   const [selectedItem, setSelectedItem] = useState(null)
-  const [foodForm, setFoodForm] = useState({ calories: '', protein: '', carbs: '', fat: '' })
+  const [foodForm, setFoodForm] = useState({ quantity: '', unit: 'g', calories: '', protein: '', carbs: '', fat: '' })
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => { load() }, [])
+  const [allFoods, setAllFoods] = useState([])
+
+  useEffect(() => {
+    load()
+    supabase.from('foods').select('id,name,calories,protein,carbs,fat').order('name')
+      .then(({ data }) => setAllFoods(data || []))
+  }, [])
 
   async function load() {
     const { data } = await supabase.from('pantry_items')
@@ -29,13 +35,28 @@ function ShoppingListCard({ session }) {
   }
 
   async function check(item) {
-    // If has nutritional info → open add-to-foods modal
-    if (!item.calories) {
+    // Look up nutrition from foods DB if item doesn't have it
+    const linked = allFoods.find(f =>
+      f.id === item.food_id || f.name.toLowerCase() === item.name.toLowerCase()
+    )
+    const cal = item.calories || linked?.calories || null
+    if (!cal) {
+      // No nutrition anywhere — open modal to add
       setSelectedItem(item)
       setFoodForm({ calories: '', protein: '', carbs: '', fat: '' })
       setShowAddFood(true)
     } else {
-      await moveToStock(item)
+      // Has nutrition (or found in DB) — open modal pre-filled
+      setSelectedItem(item)
+      setFoodForm({
+        quantity: String(item.quantity || ''),
+        unit: item.unit || 'g',
+        calories: String(cal || ''),
+        protein: String(item.protein || linked?.protein || ''),
+        carbs: String(item.carbs || linked?.carbs || ''),
+        fat: String(item.fat || linked?.fat || ''),
+      })
+      setShowAddFood(true)
     }
   }
 
@@ -62,6 +83,8 @@ function ShoppingListCard({ session }) {
     setSaving(true)
     const cal = parseFloat(foodForm.calories) || 0
     const { data, error } = await supabase.from('pantry_items').update({
+      quantity: parseFloat(foodForm.quantity) || 0,
+      unit: foodForm.unit,
       calories: cal, protein: parseFloat(foodForm.protein) || 0,
       carbs: parseFloat(foodForm.carbs) || 0, fat: parseFloat(foodForm.fat) || 0,
       list_type: 'stock',
@@ -114,9 +137,25 @@ function ShoppingListCard({ session }) {
         )}
       </div>
 
-      <Modal open={showAddFood} onClose={() => setShowAddFood(false)} title={`🛒 ${selectedItem?.name || ''}`}>
+      <Modal open={showAddFood} onClose={() => setShowAddFood(false)} title={`🛒 ${selectedItem?.name || ''} → Stoc`}>
         <div className="space-y-3">
-          <p className="text-xs text-slate-400">Adaugă valorile nutriționale pentru a salva în Alimente:</p>
+          {foodForm.calories
+            ? <p className="text-xs text-brand-green">✓ Valori nutriționale găsite — verifică și confirmă</p>
+            : <p className="text-xs text-slate-400">Completează detalii și mută în stoc:</p>
+          }
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Cantitate cumpărată</label>
+              <input className="input" type="number" placeholder="ex: 500" value={foodForm.quantity}
+                onChange={e => setFoodForm(p => ({ ...p, quantity: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Unitate</label>
+              <select className="input" value={foodForm.unit} onChange={e => setFoodForm(p => ({ ...p, unit: e.target.value }))}>
+                {['g','kg','ml','l','bucăți','linguriță','lingură','cutie','pachet'].map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-2">
             {[
               { k: 'calories', l: 'Calorii (kcal/100g)' },
@@ -136,7 +175,7 @@ function ShoppingListCard({ session }) {
               className="btn-ghost flex-1 py-3 text-sm">Sară peste</button>
             <button onClick={saveAndMove} disabled={saving || !foodForm.calories}
               className="btn-primary flex-1 py-3 disabled:opacity-50">
-              {saving ? 'Se salvează...' : 'Salvează → Alimente'}
+              {saving ? 'Se salvează...' : '📦 Mută în stoc'}
             </button>
           </div>
         </div>

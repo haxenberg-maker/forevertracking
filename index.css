@@ -1,0 +1,163 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ═══════════════════════════════════════════════════
+   CSS VARIABLES — JS sets these directly on html element
+   via style.setProperty() so they have max specificity
+═══════════════════════════════════════════════════ */
+:root {
+  --bg-900: #0f0f13;
+  --bg-800: #1a1a24;
+  --bg-700: #242433;
+  --bg-600: #2e2e42;
+  --bg-500: #383850;
+  --accent: #4ade80;
+  --accent-fg: #052e16;
+  --t1: #f8fafc;
+  --t2: #e2e8f0;
+  --t3: #cbd5e1;
+  --t4: #94a3b8;
+  --t5: #64748b;
+  --t6: #475569;
+  --border: #2e2e42;
+}
+
+/* ═══════════════════════════════════════════════════
+   BASE
+═══════════════════════════════════════════════════ */
+@layer base {
+  * { box-sizing: border-box; }
+  html, body, #root { height: 100%; margin: 0; padding: 0; }
+  body {
+    background-color: var(--bg-900);
+    color: var(--t1);
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+    transition: background-color 0.3s, color 0.3s;
+  }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg-800); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+}
+
+/* ═══════════════════════════════════════════════════
+   COMPONENTS — all use var()
+═══════════════════════════════════════════════════ */
+@layer components {
+  .card {
+    background-color: var(--bg-800);
+    border: 1px solid var(--border);
+    color: var(--t1);
+    @apply rounded-2xl p-4;
+  }
+  .btn-primary {
+    background-color: var(--accent);
+    color: var(--accent-fg);
+    @apply font-semibold px-4 py-2 rounded-xl hover:opacity-90 active:scale-95 transition-all duration-150 text-sm;
+  }
+  .btn-ghost {
+    background-color: var(--bg-700);
+    color: var(--t3);
+    border: 1px solid var(--border);
+    @apply font-medium px-4 py-2 rounded-xl active:scale-95 transition-all duration-150 text-sm;
+  }
+  .btn-danger {
+    @apply bg-red-500/20 text-red-400 font-medium px-3 py-1.5 rounded-lg hover:bg-red-500/30 transition-all duration-150 text-xs;
+  }
+  .input {
+    background-color: var(--bg-700);
+    border: 1px solid var(--border);
+    color: var(--t1);
+    @apply rounded-xl px-3 py-2.5 focus:outline-none text-sm w-full transition-all;
+  }
+  .input::placeholder { color: var(--t5); }
+  .input:focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
+  .tab-btn { @apply flex-1 py-2 text-xs font-medium rounded-lg transition-all duration-150; }
+  .tab-active  { background-color: var(--bg-600); color: var(--t1); }
+  .tab-inactive { color: var(--t5); }
+  .page { background-color: var(--bg-900); color: var(--t1); @apply min-h-screen pb-24 pt-4 px-4; }
+}
+
+/* ═══════════════════════════════════════════════════
+   GLOBAL OVERRIDES — CSS vars beat hardcoded Tailwind
+   because we set them as inline styles (highest spec)
+═══════════════════════════════════════════════════ */
+
+/* Backgrounds */
+.bg-dark-900  { background-color: var(--bg-900) !important; }
+.bg-dark-800  { background-color: var(--bg-800) !important; }
+.bg-dark-700  { background-color: var(--bg-700) !important; }
+.bg-dark-600  { background-color: var(--bg-600) !important; }
+.bg-dark-500  { background-color: var(--bg-500) !important; }
+.bg-dark-800\/95 { background-color: color-mix(in srgb, var(--bg-800) 95%, transparent) !important; }
+.hover\:bg-dark-700:hover { background-color: var(--bg-700) !important; }
+.hover\:bg-dark-600:hover { background-color: var(--bg-600) !important; }
+.hover\:bg-dark-500:hover { background-color: var(--bg-500) !important; }
+
+/* Borders */
+.border-dark-600 { border-color: var(--border) !important; }
+.border-dark-700 { border-color: color-mix(in srgb, var(--border) 70%, transparent) !important; }
+.border-slate-600 { border-color: var(--t6) !important; }
+.border-slate-500 { border-color: var(--t5) !important; }
+.divide-dark-600 > * + * { border-color: var(--border) !important; }
+
+/* Text */
+.text-white    { color: var(--t1) !important; }
+.text-slate-100 { color: var(--t1) !important; }
+.text-slate-200 { color: var(--t2) !important; }
+.text-slate-300 { color: var(--t3) !important; }
+.text-slate-400 { color: var(--t4) !important; }
+.text-slate-500 { color: var(--t5) !important; }
+.text-slate-600 { color: var(--t6) !important; }
+.text-dark-900  { color: var(--accent-fg) !important; }
+
+/* Select */
+select { background-color: var(--bg-700) !important; color: var(--t1) !important; border-color: var(--border) !important; }
+select option  { background-color: var(--bg-700); color: var(--t1); }
+
+/* Body */
+body { background-color: var(--bg-900) !important; color: var(--t1) !important; }
+
+/* ═══════════════════════════════════════════════════
+   MODAL
+═══════════════════════════════════════════════════ */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(0,0,0,0.8);
+  backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.modal-content {
+  background-color: var(--bg-800);
+  border: 1px solid var(--border);
+  color: var(--t1);
+  border-radius: 24px;
+  padding: 24px;
+  width: 100%;
+  max-width: 480px;
+  max-height: 85vh;
+  overflow-y: auto;
+  animation: fadeInScale 0.2s ease-out;
+}
+.modal-content h2,
+.modal-content p,
+.modal-content span,
+.modal-content label { color: inherit; }
+
+/* ═══════════════════════════════════════════════════
+   ANIMATIONS
+═══════════════════════════════════════════════════ */
+@keyframes progress-ring { from { stroke-dashoffset: 251; } }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeInScale {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.fade-in { animation: fadeIn 0.25s ease-out; }
+.footer-safe { padding-bottom: env(safe-area-inset-bottom, 0); }

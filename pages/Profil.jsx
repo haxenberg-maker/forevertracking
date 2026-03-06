@@ -23,22 +23,44 @@ const GOALS = [
 ]
 
 const THEMES = [
-  { key: 'dark',    label: 'Dark',    preview: ['#0f0f13','#1a1a24','#4ade80'] },
-  { key: 'ocean',   label: 'Ocean',   preview: ['#0a1628','#0f2244','#38bdf8'] },
-  { key: 'orange',  label: 'Vibe',    preview: ['#1a0f00','#2d1a00','#fb923c'] },
-  { key: 'light',   label: 'Light',   preview: ['#f8fafc','#f1f5f9','#16a34a'] },
+  { key: 'dark',  label: 'Dark',  preview: ['#0f0f13','#1a1a24','#4ade80'] },
+  { key: 'ocean', label: 'Ocean', preview: ['#040d18','#071525','#38bdf8'] },
+  { key: 'vibe',  label: 'Vibe',  preview: ['#120700','#1e0e00','#fb923c'] },
+  { key: 'light', label: 'Light', preview: ['#f1f5f9','#ffffff','#16a34a'] },
 ]
 
+const THEME_VARS = {
+  dark: {
+    '--bg-900':'#0f0f13','--bg-800':'#1a1a24','--bg-700':'#242433','--bg-600':'#2e2e42','--bg-500':'#383850',
+    '--accent':'#4ade80','--accent-fg':'#052e16',
+    '--t1':'#f8fafc','--t2':'#e2e8f0','--t3':'#cbd5e1','--t4':'#94a3b8','--t5':'#64748b','--t6':'#475569',
+    '--border':'#2e2e42',
+  },
+  ocean: {
+    '--bg-900':'#040d18','--bg-800':'#071525','--bg-700':'#0c1f38','--bg-600':'#132b4f','--bg-500':'#1a3a6e',
+    '--accent':'#38bdf8','--accent-fg':'#082f49',
+    '--t1':'#f0f9ff','--t2':'#e0f2fe','--t3':'#bae6fd','--t4':'#7dd3fc','--t5':'#38bdf8','--t6':'#0ea5e9',
+    '--border':'#1e3a6e',
+  },
+  vibe: {
+    '--bg-900':'#120700','--bg-800':'#1e0e00','--bg-700':'#2c1500','--bg-600':'#3d1d00','--bg-500':'#522600',
+    '--accent':'#fb923c','--accent-fg':'#431407',
+    '--t1':'#fff7ed','--t2':'#ffedd5','--t3':'#fed7aa','--t4':'#fdba74','--t5':'#fb923c','--t6':'#f97316',
+    '--border':'#7c2d12',
+  },
+  light: {
+    '--bg-900':'#f1f5f9','--bg-800':'#ffffff','--bg-700':'#f8fafc','--bg-600':'#e2e8f0','--bg-500':'#cbd5e1',
+    '--accent':'#16a34a','--accent-fg':'#ffffff',
+    '--t1':'#0f172a','--t2':'#1e293b','--t3':'#334155','--t4':'#475569','--t5':'#64748b','--t6':'#94a3b8',
+    '--border':'#cbd5e1',
+  },
+}
+
 function applyTheme(key) {
+  const vars = THEME_VARS[key] || THEME_VARS.dark
   const root = document.documentElement
-  const themes = {
-    dark:   { '--bg-900': '#0f0f13', '--bg-800': '#1a1a24', '--bg-700': '#242433', '--bg-600': '#2e2e42', '--accent': '#4ade80', '--text': '#f1f5f9' },
-    ocean:  { '--bg-900': '#0a1628', '--bg-800': '#0f2244', '--bg-700': '#162d55', '--bg-600': '#1e3a6e', '--accent': '#38bdf8', '--text': '#e0f2fe' },
-    orange: { '--bg-900': '#1a0f00', '--bg-800': '#2d1a00', '--bg-700': '#3d2400', '--bg-600': '#4d2e00', '--accent': '#fb923c', '--text': '#fff7ed' },
-    light:  { '--bg-900': '#f8fafc', '--bg-800': '#f1f5f9', '--bg-700': '#e2e8f0', '--bg-600': '#cbd5e1', '--accent': '#16a34a', '--text': '#0f172a' },
-  }
-  const t = themes[key] || themes.dark
-  Object.entries(t).forEach(([k, v]) => root.style.setProperty(k, v))
+  Object.entries(vars).forEach(([k, v]) => root.style.setProperty(k, v))
+  root.setAttribute('data-theme', key)
   localStorage.setItem('app_theme', key)
 }
 
@@ -141,7 +163,7 @@ export default function Profil({ session, isAdmin }) {
   const [signingOut, setSigningOut] = useState(false)
   const [activeTheme, setActiveTheme] = useState(() => localStorage.getItem('app_theme') || 'dark')
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => { loadData(); applyTheme(activeTheme) }, [])
 
   async function loadData() {
     setLoading(true)
@@ -159,7 +181,15 @@ export default function Profil({ session, isAdmin }) {
 
   function openEditProfile() {
     setEditProfile({ ...profile })
-    setMacroP(25); setMacroC(45); setMacroF(30)
+    // Calculate actual saved macro % from targets
+    if (targets && targets.calories > 0) {
+      const p = Math.round((targets.protein_g * 4 / targets.calories) * 100)
+      const f = Math.round((targets.fat_g * 9 / targets.calories) * 100)
+      const c = 100 - p - f
+      setMacroP(p); setMacroF(f); setMacroC(Math.max(10, c))
+    } else {
+      setMacroP(25); setMacroC(45); setMacroF(30)
+    }
     setShowEditProfile(true)
   }
 
@@ -345,10 +375,12 @@ export default function Profil({ session, isAdmin }) {
         {weights.length > 0 && (
           <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
             {weights.map(w => (
-              <div key={w.id} className="flex items-center justify-between bg-dark-700 rounded-xl px-3 py-2">
+              <div key={w.id} className="grid grid-cols-3 items-center bg-dark-700 rounded-xl px-3 py-2">
                 <span className="text-sm font-medium text-white">{w.weight_kg} kg</span>
-                <span className="text-xs text-slate-400 text-center flex-1">{new Date(w.date + 'T12:00:00').toLocaleDateString('ro-RO')}</span>
-                <button onClick={() => deleteWeight(w.id)} className="text-slate-600 hover:text-red-400 ml-2">×</button>
+                <span className="text-xs text-slate-400 text-center">{new Date(w.date + 'T12:00:00').toLocaleDateString('ro-RO')}</span>
+                <div className="flex justify-end">
+                  <button onClick={() => deleteWeight(w.id)} className="text-slate-600 hover:text-red-400 text-lg leading-none">×</button>
+                </div>
               </div>
             ))}
           </div>

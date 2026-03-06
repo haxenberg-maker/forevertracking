@@ -48,6 +48,7 @@ function AziTab({ session }) {
   const [selectedFood, setSelectedFood] = useState(null)
   const [selectedTemplate, setSelectedTemplate] = useState(null)
   const [quantity, setQuantity] = useState('100')
+  const [unit, setUnit] = useState('g')
   const [search, setSearch] = useState('')
   const [pickingFood, setPickingFood] = useState(false)
   const [pickingTemplate, setPickingTemplate] = useState(false)
@@ -75,6 +76,21 @@ function AziTab({ session }) {
     setMeals(data || [])
   }
 
+  // Convert any unit to grams equivalent for storage
+  function toGrams(qty, u, food) {
+    const q = parseFloat(qty) || 0
+    switch(u) {
+      case 'kg': return q * 1000
+      case 'ml': return q       // treat ml as g for liquids
+      case 'l':  return q * 1000
+      case 'linguriță': return q * 5
+      case 'lingură': return q * 15
+      case 'bucăți':
+      case 'porție': return food?.serving_size ? q * food.serving_size : q * 100
+      default: return q
+    }
+  }
+
   async function addFood() {
     if (!selectedFood || !quantity) return
     let mealLog = meals.find(m => m.meal_type === activeMealType)
@@ -82,7 +98,8 @@ function AziTab({ session }) {
       const { data } = await supabase.from('meal_logs').insert({ user_id: session.user.id, date: today, meal_type: activeMealType }).select().single()
       mealLog = data
     }
-    await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: selectedFood.id, quantity_g: parseFloat(quantity), group_id: null, group_name: null })
+    const qg = toGrams(quantity, unit, selectedFood)
+    await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: selectedFood.id, quantity_g: qg, group_id: null, group_name: null })
     closeAddModal(); loadMeals()
   }
 
@@ -110,7 +127,7 @@ function AziTab({ session }) {
 
   function closeAddModal() {
     setShowAddModal(false); setSelectedFood(null); setSelectedTemplate(null)
-    setQuantity('100'); setSearch(''); setPickingFood(false); setPickingTemplate(false); setAddMode('food')
+    setQuantity('100'); setUnit('g'); setSearch(''); setPickingFood(false); setPickingTemplate(false); setAddMode('food')
   }
 
   function groupItems(items) {
@@ -129,8 +146,8 @@ function AziTab({ session }) {
   }, { calories: 0, protein: 0, carbs: 0, fat: 0 })
 
   const pantrySuggestions = search.length > 1
-    ? pantryItems.filter(p => p.name.toLowerCase().includes(search.toLowerCase())).slice(0, 3)
-    : []
+    ? pantryItems.filter(p => p.name.toLowerCase().includes(search.toLowerCase())).slice(0, 5)
+    : pantryItems.slice(0, 5)
   const filteredFoods = allFoods.filter(f => f.name.toLowerCase().includes(search.toLowerCase()))
   const filteredTemplates = mealTemplates.filter(t => t.name.toLowerCase().includes(search.toLowerCase()))
 
@@ -242,14 +259,22 @@ function AziTab({ session }) {
                   <div className="bg-brand-green/10 border border-brand-green/20 rounded-xl p-3 space-y-2">
                     <p className="text-xs text-slate-400">{selectedFood.calories} kcal · P:{selectedFood.protein}g · C:{selectedFood.carbs}g · G:{selectedFood.fat}g (per 100g)</p>
                     {selectedFood.serving_size && (
-                      <button onClick={() => setQuantity(String(selectedFood.serving_size))}
+                      <button onClick={() => { setQuantity('1'); setUnit(selectedFood.serving_unit || 'bucăți') }}
                         className="text-xs bg-brand-blue/20 text-brand-blue px-2.5 py-1 rounded-lg">
                         1 porție = {selectedFood.serving_size}{selectedFood.serving_unit || 'g'}
                       </button>
                     )}
                     <div>
-                      <label className="text-xs text-slate-400 block mb-1">Cantitate (g)</label>
-                      <input className="input" type="number" value={quantity} onChange={e => setQuantity(e.target.value)} />
+                      <label className="text-xs text-slate-400 block mb-1">Cantitate</label>
+                      <div className="flex gap-2">
+                        <input className="input flex-1" type="number" value={quantity} onChange={e => setQuantity(e.target.value)} />
+                        <select className="input w-28" value={unit} onChange={e => setUnit(e.target.value)}>
+                          {['g','kg','ml','l','bucăți','porție','linguriță','lingură'].map(u => <option key={u} value={u}>{u}</option>)}
+                        </select>
+                      </div>
+                      {unit !== 'g' && unit !== 'ml' && (
+                        <p className="text-xs text-slate-500 mt-1">≈ {Math.round(toGrams(quantity, unit, selectedFood))}g</p>
+                      )}
                     </div>
                   </div>
                 )}
@@ -286,10 +311,15 @@ function AziTab({ session }) {
                   {pantrySuggestions.map(p => {
                     const food = allFoods.find(f => f.name.toLowerCase() === p.name.toLowerCase()) || { id: null, name: p.name, calories: p.calories || 0, protein: p.protein || 0, carbs: p.carbs || 0, fat: p.fat || 0 }
                     return (
-                      <button key={p.id} onClick={() => { setSelectedFood(food); setPickingFood(false); setSearch('') }}
+                      <button key={p.id} onClick={() => {
+                        setSelectedFood(food)
+                        setUnit(p.unit || 'g')
+                        setQuantity(p.quantity > 0 ? String(p.quantity) : '100')
+                        setPickingFood(false); setSearch('')
+                      }}
                         className="w-full flex justify-between items-center bg-brand-orange/10 border border-brand-orange/20 rounded-xl px-3 py-2.5 hover:bg-brand-orange/20 text-left">
                         <span className="text-sm text-white">{p.name}</span>
-                        <span className="text-xs text-brand-orange">{p.quantity} {p.unit}</span>
+                        <span className="text-xs text-brand-orange">{p.quantity > 0 ? `${p.quantity} ${p.unit}` : 'în stoc'}</span>
                       </button>
                     )
                   })}
@@ -384,7 +414,13 @@ function MeseTab({ session, isAdmin }) {
   function addItem() { setItems(prev => [...prev, { food_id: '', food: null, quantity_g: '100' }]) }
   function removeItem(i) { setItems(prev => prev.filter((_, idx) => idx !== i)) }
   function updateItem(i, key, val) { setItems(prev => prev.map((it, idx) => idx === i ? { ...it, [key]: val } : it)) }
-  function pickFood(food, idx) { updateItem(idx, 'food', food); updateItem(idx, 'food_id', food.id); setPickingIdx(null); setFoodSearch('') }
+  function pickFood(food, idx) {
+    updateItem(idx, 'food', food)
+    updateItem(idx, 'food_id', food.id)
+    // Auto-set quantity to serving_size if available
+    if (food.serving_size) updateItem(idx, 'quantity_g', String(food.serving_size))
+    setPickingIdx(null); setFoodSearch('')
+  }
 
   async function saveTemplate() {
     if (!form.name) return
@@ -566,7 +602,9 @@ function MeseTab({ session, isAdmin }) {
                   <button key={f.id} onClick={() => pickFood(f, pickingIdx)}
                     className="w-full flex justify-between items-center bg-dark-700 rounded-xl px-3 py-2.5 hover:bg-dark-600 text-left">
                     <span className="text-sm text-white">{f.name}</span>
-                    <span className="text-xs text-slate-400">{f.calories} kcal/100g</span>
+                    <span className="text-xs text-slate-400">
+                      {f.calories} kcal{f.serving_size ? ` · ${f.serving_size}${f.serving_unit||'g'}` : '/100g'}
+                    </span>
                   </button>
                 ))}
             </div>
