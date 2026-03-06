@@ -268,7 +268,6 @@ function AziTab({ session }) {
         )
       })}
 
-      })}\n
       {/* Suplimente luate azi cu macronutrienți */}
       {takenSupplements.length > 0 && (
         <div className="card">

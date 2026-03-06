@@ -1632,11 +1632,38 @@ function PlanTab({ session, isAdmin }) {
             )}
           </div>
 
-          {/* 2. Oră */}
+          {/* 2. Oră — selector explicit 24h */}
           <div>
             <label className="text-xs text-slate-400 block mb-1">Oră (opțional)</label>
-            <input className="input" type="time" step="60" value={form.time}
-              onChange={e => setForm(p => ({ ...p, time: e.target.value }))} />
+            <div className="flex gap-2 items-center">
+              <select className="input flex-1" value={form.time.split(':')[0] || ''}
+                onChange={e => {
+                  const h = e.target.value
+                  const m = form.time.split(':')[1] || '00'
+                  setForm(p => ({ ...p, time: h ? `${h}:${m}` : '' }))
+                }}>
+                <option value="">—</option>
+                {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(h => (
+                  <option key={h} value={h}>{h}h</option>
+                ))}
+              </select>
+              <span className="text-slate-500 text-sm font-bold">:</span>
+              <select className="input flex-1" value={form.time.split(':')[1] || '00'}
+                disabled={!form.time.split(':')[0]}
+                onChange={e => {
+                  const h = form.time.split(':')[0] || '00'
+                  setForm(p => ({ ...p, time: `${h}:${e.target.value}` }))
+                }}>
+                {['00','05','10','15','20','25','30','35','40','45','50','55'].map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+              {form.time && (
+                <button onClick={() => setForm(p => ({ ...p, time: '' }))}
+                  className="text-slate-600 hover:text-red-400 px-2 py-2 text-lg transition-colors">×</button>
+              )}
+            </div>
+            {form.time && <p className="text-xs text-brand-green mt-1">⏰ {form.time}</p>}
           </div>
 
           {/* 3. Tip */}

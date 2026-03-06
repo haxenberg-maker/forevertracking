@@ -814,15 +814,27 @@ export default function Dashboard({ session, isAdmin }) {
     if (pr?.full_name) setUserName(pr.full_name)
 
     const { data: meals } = await supabase.from('meal_logs').select('id, meal_items(quantity_g, foods(calories, protein, carbs, fat))').eq('user_id', uid).eq('date', today)
+    let cal = 0, prot = 0, carb = 0, fat = 0
     if (meals) {
-      let cal = 0, prot = 0, carb = 0, fat = 0
       meals.forEach(m => m.meal_items?.forEach(item => {
         const f = item.foods; const r = item.quantity_g / 100
         cal += (f?.calories || 0) * r; prot += (f?.protein || 0) * r
         carb += (f?.carbs || 0) * r; fat += (f?.fat || 0) * r
       }))
-      setTodayNutrition({ calories: cal, protein: prot, carbs: carb, fat })
     }
+    // Add supplement macros (taken today, with nutritional values)
+    const { data: allSups } = await supabase.from('daily_supplements').select('*').eq('user_id', uid)
+    if (allSups?.length) {
+      const { data: supLogs } = await supabase.from('supplement_logs').select('supplement_id').eq('user_id', uid).eq('date', today).eq('taken', true)
+      const takenIds = new Set((supLogs || []).map(l => l.supplement_id))
+      allSups.filter(s => takenIds.has(s.id)).forEach(s => {
+        cal  += s.calories  || 0
+        prot += s.protein_g || 0
+        carb += s.carbs_g   || 0
+        fat  += s.fat_g     || 0
+      })
+    }
+    setTodayNutrition({ calories: cal, protein: prot, carbs: carb, fat })
 
     const { data: wo } = await supabase.from('workout_logs').select('id, type').eq('user_id', uid).eq('date', today)
     const { data: runs } = await supabase.from('running_logs').select('distance_km').eq('user_id', uid).eq('date', today)
