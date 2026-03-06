@@ -40,6 +40,7 @@ function AziTab({ session }) {
   const today = getToday()
   const [meals, setMeals] = useState([])
   const [allFoods, setAllFoods] = useState([])
+  const [pantryItems, setPantryItems] = useState([])
   const [mealTemplates, setMealTemplates] = useState([])
   const [showAddModal, setShowAddModal] = useState(false)
   const [activeMealType, setActiveMealType] = useState(null)
@@ -47,11 +48,13 @@ function AziTab({ session }) {
   const [selectedFood, setSelectedFood] = useState(null)
   const [selectedTemplate, setSelectedTemplate] = useState(null)
   const [quantity, setQuantity] = useState('100')
+  const [unit, setUnit] = useState('g')
   const [search, setSearch] = useState('')
   const [pickingFood, setPickingFood] = useState(false)
   const [pickingTemplate, setPickingTemplate] = useState(false)
   const [editingItem, setEditingItem] = useState(null)
   const [editQty, setEditQty] = useState('')
+  const [collapsed, setCollapsed] = useState({})
 
   useEffect(() => { loadAll() }, [])
 
@@ -59,10 +62,9 @@ function AziTab({ session }) {
     loadMeals()
     const { data: foods } = await supabase.from('foods').select('*').order('name')
     setAllFoods(foods || [])
-    const { data: templates } = await supabase.from('meal_templates').select(`
-      id, name,
-      meal_template_items(quantity_g, foods(id, name, calories, protein, carbs, fat))
-    `).order('name')
+    const { data: pantry } = await supabase.from('pantry_items').select('*').eq('user_id', session.user.id).eq('list_type', 'stock')
+    setPantryItems(pantry || [])
+    const { data: templates } = await supabase.from('meal_templates').select(`id, name, meal_template_items(quantity_g, foods(id, name, calories, protein, carbs, fat))`).order('name')
     setMealTemplates(templates || [])
   }
 
@@ -74,19 +76,30 @@ function AziTab({ session }) {
     setMeals(data || [])
   }
 
+  // Convert any unit to grams equivalent for storage
+  function toGrams(qty, u, food) {
+    const q = parseFloat(qty) || 0
+    switch(u) {
+      case 'kg': return q * 1000
+      case 'ml': return q       // treat ml as g for liquids
+      case 'l':  return q * 1000
+      case 'linguriță': return q * 5
+      case 'lingură': return q * 15
+      case 'bucăți':
+      case 'porție': return food?.serving_size ? q * food.serving_size : q * 100
+      default: return q
+    }
+  }
+
   async function addFood() {
     if (!selectedFood || !quantity) return
     let mealLog = meals.find(m => m.meal_type === activeMealType)
     if (!mealLog) {
-      const { data } = await supabase.from('meal_logs').insert({
-        user_id: session.user.id, date: today, meal_type: activeMealType
-      }).select().single()
+      const { data } = await supabase.from('meal_logs').insert({ user_id: session.user.id, date: today, meal_type: activeMealType }).select().single()
       mealLog = data
     }
-    await supabase.from('meal_items').insert({
-      meal_log_id: mealLog.id, food_id: selectedFood.id,
-      quantity_g: parseFloat(quantity), group_id: null, group_name: null
-    })
+    const qg = toGrams(quantity, unit, selectedFood)
+    await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: selectedFood.id, quantity_g: qg, group_id: null, group_name: null })
     closeAddModal(); loadMeals()
   }
 
@@ -94,29 +107,18 @@ function AziTab({ session }) {
     if (!selectedTemplate) return
     let mealLog = meals.find(m => m.meal_type === activeMealType)
     if (!mealLog) {
-      const { data } = await supabase.from('meal_logs').insert({
-        user_id: session.user.id, date: today, meal_type: activeMealType
-      }).select().single()
+      const { data } = await supabase.from('meal_logs').insert({ user_id: session.user.id, date: today, meal_type: activeMealType }).select().single()
       mealLog = data
     }
     const gid = genUUID()
     await supabase.from('meal_items').insert(
-      selectedTemplate.meal_template_items.map(i => ({
-        meal_log_id: mealLog.id, food_id: i.foods.id,
-        quantity_g: i.quantity_g, group_id: gid, group_name: selectedTemplate.name
-      }))
+      selectedTemplate.meal_template_items.map(i => ({ meal_log_id: mealLog.id, food_id: i.foods.id, quantity_g: i.quantity_g, group_id: gid, group_name: selectedTemplate.name }))
     )
     closeAddModal(); loadMeals()
   }
 
-  async function removeItem(itemId) {
-    await supabase.from('meal_items').delete().eq('id', itemId); loadMeals()
-  }
-
-  async function removeGroup(groupId) {
-    await supabase.from('meal_items').delete().eq('group_id', groupId); loadMeals()
-  }
-
+  async function removeItem(itemId) { await supabase.from('meal_items').delete().eq('id', itemId); loadMeals() }
+  async function removeGroup(groupId) { await supabase.from('meal_items').delete().eq('group_id', groupId); loadMeals() }
   async function saveEditItem() {
     if (!editingItem || !editQty) return
     await supabase.from('meal_items').update({ quantity_g: parseFloat(editQty) }).eq('id', editingItem.id)
@@ -125,7 +127,7 @@ function AziTab({ session }) {
 
   function closeAddModal() {
     setShowAddModal(false); setSelectedFood(null); setSelectedTemplate(null)
-    setQuantity('100'); setSearch(''); setPickingFood(false); setPickingTemplate(false); setAddMode('food')
+    setQuantity('100'); setUnit('g'); setSearch(''); setPickingFood(false); setPickingTemplate(false); setAddMode('food')
   }
 
   function groupItems(items) {
@@ -143,6 +145,9 @@ function AziTab({ session }) {
     return { calories: acc.calories + n.calories, protein: acc.protein + n.protein, carbs: acc.carbs + n.carbs, fat: acc.fat + n.fat }
   }, { calories: 0, protein: 0, carbs: 0, fat: 0 })
 
+  const pantrySuggestions = search.length > 1
+    ? pantryItems.filter(p => p.name.toLowerCase().includes(search.toLowerCase())).slice(0, 5)
+    : pantryItems.slice(0, 5)
   const filteredFoods = allFoods.filter(f => f.name.toLowerCase().includes(search.toLowerCase()))
   const filteredTemplates = mealTemplates.filter(t => t.name.toLowerCase().includes(search.toLowerCase()))
 
@@ -170,67 +175,70 @@ function AziTab({ session }) {
         const items = mealLog?.meal_items || []
         const nutr = calcNutr(items)
         const { ungrouped, groups } = groupItems(items)
+        const isCollapsed = false // always expanded in Azi tab
         return (
           <div key={mt.key} className="card">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span>{mt.emoji}</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 flex-1 text-left min-w-0">
+                <span className="shrink-0">{mt.emoji}</span>
                 <span className="font-semibold text-sm text-white">{mt.label}</span>
-                {items.length > 0 && <span className="text-xs text-slate-400">{Math.round(nutr.calories)} kcal</span>}
+                {items.length > 0 && (
+                  <span className="text-xs text-slate-400 ml-1">{Math.round(nutr.calories)} kcal</span>
+                )}
               </div>
               <button onClick={() => { setActiveMealType(mt.key); setShowAddModal(true) }}
-                className="w-7 h-7 rounded-lg bg-brand-green/20 text-brand-green text-lg flex items-center justify-center hover:bg-brand-green/30 transition-colors">+</button>
+                className="w-7 h-7 rounded-lg bg-brand-green/20 text-brand-green text-lg flex items-center justify-center hover:bg-brand-green/30 shrink-0">+</button>
             </div>
-            {items.length === 0 ? <p className="text-slate-600 text-xs">Niciun aliment adăugat</p> : (
-              <div className="space-y-2">
-                {Object.entries(groups).map(([gid, group]) => {
-                  const gNutr = calcNutr(group.items)
-                  return (
-                    <div key={gid} className="bg-dark-700 rounded-xl overflow-hidden">
-                      <div className="flex items-center justify-between px-3 py-2 bg-brand-blue/10 border-b border-dark-600">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm">🍽️</span>
-                          <span className="text-sm font-semibold text-brand-blue">{group.name}</span>
-                          <span className="text-xs text-slate-400">{Math.round(gNutr.calories)} kcal</span>
-                        </div>
-                        <button onClick={() => removeGroup(gid)}
-                          className="text-xs bg-red-500/20 text-red-400 px-2 py-1 rounded-lg hover:bg-red-500/30 transition-colors">
-                          Șterge masa
-                        </button>
-                      </div>
-                      <div className="divide-y divide-dark-600">
-                        {group.items.map(item => (
-                          <div key={item.id} className="flex items-center justify-between px-3 py-2">
-                            <div>
-                              <p className="text-sm text-slate-200">{item.foods?.name}</p>
-                              <p className="text-xs text-slate-500">{item.quantity_g}g · {Math.round((item.foods?.calories || 0) * item.quantity_g / 100)} kcal</p>
+
+            <div className="mt-2 space-y-2">
+                {items.length === 0 ? (
+                  <p className="text-slate-600 text-xs">Niciun aliment adăugat</p>
+                ) : (
+                  <>
+                    {Object.entries(groups).map(([gid, group]) => {
+                      const gNutr = calcNutr(group.items)
+                      return (
+                        <div key={gid} className="bg-dark-700 rounded-xl overflow-hidden">
+                          <div className="flex items-center justify-between px-3 py-2 bg-brand-blue/10 border-b border-dark-600">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm">🍽️</span>
+                              <span className="text-sm font-semibold text-brand-blue">{group.name}</span>
+                              <span className="text-xs text-slate-400">{Math.round(gNutr.calories)} kcal</span>
                             </div>
-                            <div className="flex gap-2">
-                              <button onClick={() => { setEditingItem(item); setEditQty(String(item.quantity_g)) }}
-                                className="text-xs bg-dark-600 text-slate-300 px-2 py-1 rounded-lg hover:bg-dark-500">✏️</button>
-                              <button onClick={() => removeItem(item.id)} className="text-slate-600 hover:text-red-400 text-lg">×</button>
-                            </div>
+                            <button onClick={() => removeGroup(gid)} className="text-xs bg-red-500/20 text-red-400 px-2 py-1 rounded-lg">Șterge</button>
                           </div>
-                        ))}
+                          <div className="divide-y divide-dark-600">
+                            {group.items.map(item => (
+                              <div key={item.id} className="flex items-center justify-between px-3 py-2">
+                                <div>
+                                  <p className="text-sm text-slate-200">{item.foods?.name}</p>
+                                  <p className="text-xs text-slate-500">{item.quantity_g}g · {Math.round((item.foods?.calories || 0) * item.quantity_g / 100)} kcal</p>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button onClick={() => { setEditingItem(item); setEditQty(String(item.quantity_g)) }} className="text-xs bg-dark-600 text-slate-300 px-2 py-1 rounded-lg">✏️</button>
+                                  <button onClick={() => removeItem(item.id)} className="text-slate-600 hover:text-red-400 text-lg">×</button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
+                    {ungrouped.map(item => (
+                      <div key={item.id} className="flex items-center justify-between bg-dark-700 rounded-xl px-3 py-2">
+                        <div>
+                          <p className="text-sm text-white">{item.foods?.name}</p>
+                          <p className="text-xs text-slate-400">{item.quantity_g}g · {Math.round((item.foods?.calories || 0) * item.quantity_g / 100)} kcal</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => { setEditingItem(item); setEditQty(String(item.quantity_g)) }} className="text-xs bg-dark-600 text-slate-300 px-2 py-1 rounded-lg">✏️</button>
+                          <button onClick={() => removeItem(item.id)} className="text-slate-600 hover:text-red-400 text-lg">×</button>
+                        </div>
                       </div>
-                    </div>
-                  )
-                })}
-                {ungrouped.map(item => (
-                  <div key={item.id} className="flex items-center justify-between bg-dark-700 rounded-xl px-3 py-2">
-                    <div>
-                      <p className="text-sm text-white">{item.foods?.name}</p>
-                      <p className="text-xs text-slate-400">{item.quantity_g}g · {Math.round((item.foods?.calories || 0) * item.quantity_g / 100)} kcal</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => { setEditingItem(item); setEditQty(String(item.quantity_g)) }}
-                        className="text-xs bg-dark-600 text-slate-300 px-2 py-1 rounded-lg hover:bg-dark-500">✏️</button>
-                      <button onClick={() => removeItem(item.id)} className="text-slate-600 hover:text-red-400 text-lg">×</button>
-                    </div>
-                  </div>
-                ))}
+                    ))}
+                  </>
+                )}
               </div>
-            )}
           </div>
         )
       })}
@@ -248,11 +256,25 @@ function AziTab({ session }) {
                   🔍 {selectedFood ? selectedFood.name : 'Caută aliment...'}
                 </button>
                 {selectedFood && (
-                  <div className="bg-brand-green/10 border border-brand-green/20 rounded-xl p-3">
+                  <div className="bg-brand-green/10 border border-brand-green/20 rounded-xl p-3 space-y-2">
                     <p className="text-xs text-slate-400">{selectedFood.calories} kcal · P:{selectedFood.protein}g · C:{selectedFood.carbs}g · G:{selectedFood.fat}g (per 100g)</p>
-                    <div className="mt-2">
-                      <label className="text-xs text-slate-400 block mb-1">Cantitate (grame)</label>
-                      <input className="input" type="number" value={quantity} onChange={e => setQuantity(e.target.value)} />
+                    {selectedFood.serving_size && (
+                      <button onClick={() => { setQuantity('1'); setUnit(selectedFood.serving_unit || 'bucăți') }}
+                        className="text-xs bg-brand-blue/20 text-brand-blue px-2.5 py-1 rounded-lg">
+                        1 porție = {selectedFood.serving_size}{selectedFood.serving_unit || 'g'}
+                      </button>
+                    )}
+                    <div>
+                      <label className="text-xs text-slate-400 block mb-1">Cantitate</label>
+                      <div className="flex gap-2">
+                        <input className="input flex-1" type="number" value={quantity} onChange={e => setQuantity(e.target.value)} />
+                        <select className="input w-28" value={unit} onChange={e => setUnit(e.target.value)}>
+                          {['g','kg','ml','l','bucăți','porție','linguriță','lingură'].map(u => <option key={u} value={u}>{u}</option>)}
+                        </select>
+                      </div>
+                      {unit !== 'g' && unit !== 'ml' && (
+                        <p className="text-xs text-slate-500 mt-1">≈ {Math.round(toGrams(quantity, unit, selectedFood))}g</p>
+                      )}
                     </div>
                   </div>
                 )}
@@ -282,13 +304,35 @@ function AziTab({ session }) {
         {pickingFood && (
           <div className="space-y-3">
             <input className="input" autoFocus value={search} onChange={e => setSearch(e.target.value)} placeholder="Caută aliment..." />
-            <div className="space-y-1.5 max-h-64 overflow-y-auto">
+            {pantrySuggestions.length > 0 && (
+              <div>
+                <p className="text-xs text-brand-orange font-medium mb-1.5">🧺 Din cămară</p>
+                <div className="space-y-1">
+                  {pantrySuggestions.map(p => {
+                    const food = allFoods.find(f => f.name.toLowerCase() === p.name.toLowerCase()) || { id: null, name: p.name, calories: p.calories || 0, protein: p.protein || 0, carbs: p.carbs || 0, fat: p.fat || 0 }
+                    return (
+                      <button key={p.id} onClick={() => {
+                        setSelectedFood(food)
+                        setUnit(p.unit || 'g')
+                        setQuantity(p.quantity > 0 ? String(p.quantity) : '100')
+                        setPickingFood(false); setSearch('')
+                      }}
+                        className="w-full flex justify-between items-center bg-brand-orange/10 border border-brand-orange/20 rounded-xl px-3 py-2.5 hover:bg-brand-orange/20 text-left">
+                        <span className="text-sm text-white">{p.name}</span>
+                        <span className="text-xs text-brand-orange">{p.quantity > 0 ? `${p.quantity} ${p.unit}` : 'în stoc'}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+            <div className="space-y-1.5 max-h-56 overflow-y-auto">
               {filteredFoods.length === 0 ? <p className="text-slate-500 text-sm text-center py-4">Niciun aliment găsit.</p>
                 : filteredFoods.map(f => (
                   <button key={f.id} onClick={() => { setSelectedFood(f); setPickingFood(false); setSearch('') }}
                     className="w-full flex justify-between items-center bg-dark-700 rounded-xl px-3 py-2.5 hover:bg-dark-600 text-left">
                     <span className="text-sm text-white">{f.name}</span>
-                    <span className="text-xs text-slate-400">{f.calories} kcal/100g</span>
+                    <span className="text-xs text-slate-400">{f.calories} kcal{f.serving_size ? ` · ${f.serving_size}${f.serving_unit || 'g'}/porție` : '/100g'}</span>
                   </button>
                 ))}
             </div>
@@ -306,7 +350,7 @@ function AziTab({ session }) {
                     <button key={t.id} onClick={() => { setSelectedTemplate(t); setPickingTemplate(false); setSearch('') }}
                       className="w-full flex justify-between items-center bg-dark-700 rounded-xl px-3 py-2.5 hover:bg-dark-600 text-left">
                       <span className="text-sm text-white">{t.name}</span>
-                      <span className="text-xs text-slate-400">{Math.round(n.calories)} kcal · {t.meal_template_items.length} alim.</span>
+                      <span className="text-xs text-slate-400">{Math.round(n.calories)} kcal</span>
                     </button>
                   )
                 })}
@@ -320,12 +364,7 @@ function AziTab({ session }) {
         {editingItem && (
           <div className="space-y-3">
             <p className="text-sm text-white font-medium">{editingItem.foods?.name}</p>
-            <div>
-              <label className="text-xs text-slate-400 block mb-1">Cantitate (grame)</label>
-              <input className="input" type="number" autoFocus value={editQty}
-                onChange={e => setEditQty(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && saveEditItem()} />
-            </div>
+            <input className="input" type="number" autoFocus value={editQty} onChange={e => setEditQty(e.target.value)} onKeyDown={e => e.key === 'Enter' && saveEditItem()} />
             <div className="grid grid-cols-2 gap-2">
               <button onClick={() => setEditingItem(null)} className="btn-ghost py-3">Anulează</button>
               <button onClick={saveEditItem} className="btn-primary py-3">Salvează</button>
@@ -336,7 +375,6 @@ function AziTab({ session }) {
     </div>
   )
 }
-
 // ─── MESE ─────────────────────────────────────────────
 
 function MeseTab({ session, isAdmin }) {
@@ -350,6 +388,7 @@ function MeseTab({ session, isAdmin }) {
   const [pickingIdx, setPickingIdx] = useState(null)
   const [foodSearch, setFoodSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [collapsed, setCollapsed] = useState({})
   const csvRef = useRef()
 
   useEffect(() => { loadAll() }, [])
@@ -375,7 +414,13 @@ function MeseTab({ session, isAdmin }) {
   function addItem() { setItems(prev => [...prev, { food_id: '', food: null, quantity_g: '100' }]) }
   function removeItem(i) { setItems(prev => prev.filter((_, idx) => idx !== i)) }
   function updateItem(i, key, val) { setItems(prev => prev.map((it, idx) => idx === i ? { ...it, [key]: val } : it)) }
-  function pickFood(food, idx) { updateItem(idx, 'food', food); updateItem(idx, 'food_id', food.id); setPickingIdx(null); setFoodSearch('') }
+  function pickFood(food, idx) {
+    updateItem(idx, 'food', food)
+    updateItem(idx, 'food_id', food.id)
+    // Auto-set quantity to serving_size if available
+    if (food.serving_size) updateItem(idx, 'quantity_g', String(food.serving_size))
+    setPickingIdx(null); setFoodSearch('')
+  }
 
   async function saveTemplate() {
     if (!form.name) return
@@ -451,28 +496,48 @@ function MeseTab({ session, isAdmin }) {
             {filteredTemplates.map(t => {
               const n = calcNutr(t.meal_template_items)
               const isOwn = t.user_id === session.user.id
+              const isOpen = collapsed[t.id] === true
               return (
                 <div key={t.id} className="card">
-                  <div className="flex items-start justify-between mb-2">
-                    <div>
-                      <p className="font-semibold text-white">{t.name}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">{Math.round(n.calories)} kcal · P:{Math.round(n.protein)}g · C:{Math.round(n.carbs)}g · G:{Math.round(n.fat)}g</p>
-                    </div>
+                  <div className="flex items-center justify-between">
+                    <button onClick={() => setCollapsed(p => ({ ...p, [t.id]: !isOpen }))}
+                      className="flex items-center gap-2 flex-1 text-left min-w-0">
+                      <span className="text-lg">🍽️</span>
+                      <div className="min-w-0">
+                        <p className="font-semibold text-white text-sm">{t.name}</p>
+                        <p className="text-xs text-slate-400">{Math.round(n.calories)} kcal · {t.meal_template_items.length} alim.</p>
+                      </div>
+                      <span className="text-xs text-slate-600 ml-2 shrink-0">{isOpen ? '▲' : '▼'}</span>
+                    </button>
                     {isOwn && (
-                      <div className="flex gap-1.5 ml-2">
+                      <div className="flex gap-1.5 ml-2 shrink-0">
                         <button onClick={() => openEdit(t)} className="text-xs bg-dark-700 text-slate-300 px-2 py-1.5 rounded-lg hover:bg-dark-600">✏️</button>
                         <button onClick={() => deleteTemplate(t.id)} className="text-xs bg-red-500/10 text-red-400 px-2 py-1.5 rounded-lg hover:bg-red-500/20">🗑</button>
                       </div>
                     )}
                   </div>
-                  <div className="space-y-1">
-                    {t.meal_template_items.map((item, i) => (
-                      <div key={i} className="flex justify-between items-center bg-dark-700 rounded-lg px-3 py-1.5 text-xs">
-                        <span className="text-slate-300">{item.foods?.name}</span>
-                        <span className="text-slate-500">{item.quantity_g}g · {Math.round((item.foods?.calories || 0) * item.quantity_g / 100)} kcal</span>
+                  {isOpen && (
+                    <div className="mt-2 space-y-1">
+                      <div className="grid grid-cols-4 gap-1 text-center text-xs text-slate-500 mb-1">
+                        {[
+                          { l: 'prot.', v: Math.round(n.protein), c: 'text-brand-blue' },
+                          { l: 'carb.', v: Math.round(n.carbs), c: 'text-brand-orange' },
+                          { l: 'grăs.', v: Math.round(n.fat), c: 'text-brand-purple' },
+                        ].map(x => (
+                          <div key={x.l} className="bg-dark-700 rounded-lg py-1">
+                            <p className={`text-xs font-bold ${x.c}`}>{x.v}g</p>
+                            <p className="text-xs text-slate-600">{x.l}</p>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                      {t.meal_template_items.map((item, i) => (
+                        <div key={i} className="flex justify-between items-center bg-dark-700 rounded-lg px-3 py-1.5 text-xs">
+                          <span className="text-slate-300">{item.foods?.name}</span>
+                          <span className="text-slate-500">{item.quantity_g}g · {Math.round((item.foods?.calories || 0) * item.quantity_g / 100)} kcal</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -537,7 +602,9 @@ function MeseTab({ session, isAdmin }) {
                   <button key={f.id} onClick={() => pickFood(f, pickingIdx)}
                     className="w-full flex justify-between items-center bg-dark-700 rounded-xl px-3 py-2.5 hover:bg-dark-600 text-left">
                     <span className="text-sm text-white">{f.name}</span>
-                    <span className="text-xs text-slate-400">{f.calories} kcal/100g</span>
+                    <span className="text-xs text-slate-400">
+                      {f.calories} kcal{f.serving_size ? ` · ${f.serving_size}${f.serving_unit||'g'}` : '/100g'}
+                    </span>
                   </button>
                 ))}
             </div>
@@ -555,10 +622,12 @@ function AlimenteTab({ session, isAdmin }) {
   const [foods, setFoods] = useState([])
   const [showModal, setShowModal] = useState(false)
   const [editFood, setEditFood] = useState(null)
-  const [form, setForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '' })
+  const [form, setForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '', serving_size: '', serving_unit: 'g' })
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const csvRef = useRef()
+
+  const SERVING_UNITS = ['g', 'ml', 'bucată', 'lingură', 'linguriță', 'felie', 'porție']
 
   useEffect(() => { loadFoods() }, [])
 
@@ -569,8 +638,11 @@ function AlimenteTab({ session, isAdmin }) {
     setLoading(false)
   }
 
-  function openAdd() { setForm({ name: '', calories: '', protein: '', carbs: '', fat: '' }); setEditFood(null); setShowModal(true) }
-  function openEdit(f) { setForm({ name: f.name, calories: String(f.calories), protein: String(f.protein), carbs: String(f.carbs), fat: String(f.fat) }); setEditFood(f); setShowModal(true) }
+  function openAdd() { setForm({ name: '', calories: '', protein: '', carbs: '', fat: '', serving_size: '', serving_unit: 'g' }); setEditFood(null); setShowModal(true) }
+  function openEdit(f) {
+    setForm({ name: f.name, calories: String(f.calories), protein: String(f.protein), carbs: String(f.carbs), fat: String(f.fat), serving_size: String(f.serving_size || ''), serving_unit: f.serving_unit || 'g' })
+    setEditFood(f); setShowModal(true)
+  }
 
   async function saveFood() {
     if (!form.name || !form.calories) return
@@ -582,6 +654,8 @@ function AlimenteTab({ session, isAdmin }) {
       protein: parseFloat(form.protein) || 0,
       carbs: parseFloat(form.carbs) || 0,
       fat: parseFloat(form.fat) || 0,
+      serving_size: parseFloat(form.serving_size) || null,
+      serving_unit: form.serving_unit || 'g',
     }
     if (editFood) await supabase.from('foods').update(data).eq('id', editFood.id)
     else await supabase.from('foods').insert(data)
@@ -641,14 +715,11 @@ function AlimenteTab({ session, isAdmin }) {
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-sm text-white">{f.name}</p>
                   <p className="text-xs text-slate-400 mt-0.5">{f.calories} kcal · P:{f.protein}g · C:{f.carbs}g · G:{f.fat}g<span className="text-slate-600"> /100g</span></p>
+                  {f.serving_size && <p className="text-xs text-brand-blue mt-0.5">📏 1 porție = {f.serving_size} {f.serving_unit || 'g'} ({Math.round(f.calories * f.serving_size / 100)} kcal)</p>}
                 </div>
                 <div className="flex gap-2 ml-3 shrink-0">
-                  {canEdit(f) && (
-                    <button onClick={() => openEdit(f)} className="text-xs bg-dark-700 text-slate-300 px-2.5 py-1.5 rounded-lg hover:bg-dark-600">✏️</button>
-                  )}
-                  {canDelete(f) && (
-                    <button onClick={() => deleteFood(f.id)} className="text-xs bg-red-500/10 text-red-400 px-2.5 py-1.5 rounded-lg hover:bg-red-500/20">🗑</button>
-                  )}
+                  {canEdit(f) && <button onClick={() => openEdit(f)} className="text-xs bg-dark-700 text-slate-300 px-2.5 py-1.5 rounded-lg hover:bg-dark-600">✏️</button>}
+                  {canDelete(f) && <button onClick={() => deleteFood(f.id)} className="text-xs bg-red-500/10 text-red-400 px-2.5 py-1.5 rounded-lg hover:bg-red-500/20">🗑</button>}
                 </div>
               </div>
             ))}
@@ -659,8 +730,8 @@ function AlimenteTab({ session, isAdmin }) {
         <div className="space-y-3">
           {isAdmin && editFood?.user_email && (
             <div className="bg-dark-700 rounded-xl px-3 py-2 flex items-center gap-2">
-              <span className="text-xs text-slate-500">👤 Adăugat de:</span>
-              <span className="text-xs text-slate-300 font-medium">{editFood.user_email}</span>
+              <span className="text-xs text-slate-500">👤</span>
+              <span className="text-xs text-slate-300">{editFood.user_email}</span>
             </div>
           )}
           {[
@@ -675,13 +746,34 @@ function AlimenteTab({ session, isAdmin }) {
               <input className="input" type={field.type} placeholder={field.placeholder} value={form[field.key]} onChange={e => setForm(p => ({ ...p, [field.key]: e.target.value }))} />
             </div>
           ))}
+
+          {/* Serving size */}
+          <div className="border-t border-dark-600 pt-3">
+            <p className="text-xs text-slate-400 mb-2">📏 Mărime porție (opțional)</p>
+            <p className="text-xs text-slate-500 mb-2">ex: Baton Kinder = 15g/bucată — apasă butonul de porție la adăugare</p>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs text-slate-500 block mb-1">Cantitate porție</label>
+                <input className="input" type="number" placeholder="ex: 15" value={form.serving_size} onChange={e => setForm(p => ({ ...p, serving_size: e.target.value }))} />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 block mb-1">Unitate</label>
+                <select className="input" value={form.serving_unit} onChange={e => setForm(p => ({ ...p, serving_unit: e.target.value }))}>
+                  {SERVING_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
+            </div>
+            {form.serving_size && form.calories && (
+              <p className="text-xs text-brand-green mt-2">≈ {Math.round(parseFloat(form.calories) * parseFloat(form.serving_size) / 100)} kcal / {form.serving_unit || 'porție'}</p>
+            )}
+          </div>
+
           <button onClick={saveFood} className="btn-primary w-full py-3">{editFood ? 'Salvează' : 'Adaugă'}</button>
         </div>
       </Modal>
     </div>
   )
 }
-
 // ─── TARGET-URI ───────────────────────────────────────
 
 function TargeturiTab({ session }) {
