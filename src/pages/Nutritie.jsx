@@ -66,8 +66,11 @@ function AziTab({ session }) {
     setAllFoods(foods || [])
     const { data: pantry } = await supabase.from('pantry_items').select('*').eq('user_id', session.user.id).eq('list_type', 'stock')
     setPantryItems(pantry || [])
-    const { data: templates } = await supabase.from('meal_templates').select(`id, name, meal_template_items(quantity_g, foods(id, name, calories, protein, carbs, fat))`).order('name')
-    setMealTemplates(templates || [])
+    const { data: templates } = await supabase.from('meal_templates')
+      .select(`id, name, user_id, is_public, meal_template_items(quantity_g, foods(id, name, calories, protein, carbs, fat))`)
+      .order('name')
+    // Show only own templates + public ones
+    setMealTemplates((templates || []).filter(t => t.user_id === session.user.id || t.is_public === true))
     // Load supplements taken today (with macro info)
     const { data: sups } = await supabase.from('daily_supplements').select('*').eq('user_id', session.user.id)
     if (sups?.length) {
@@ -288,11 +291,13 @@ function AziTab({ session }) {
                   <p className="text-xs font-medium text-brand-green">✓ {s.name}</p>
                   <p className="text-xs text-slate-500">{s.amount_g} {s.unit}</p>
                 </div>
-                <div className="text-right text-xs text-slate-400">
-                  {s.calories > 0 && <span>{s.calories} kcal</span>}
-                  {s.protein_g > 0 && <span className="ml-1.5 text-brand-blue">P:{s.protein_g}g</span>}
-                  {s.carbs_g > 0 && <span className="ml-1.5 text-brand-orange">C:{s.carbs_g}g</span>}
-                  {s.fat_g > 0 && <span className="ml-1.5 text-brand-purple">G:{s.fat_g}g</span>}
+                <div className="text-right text-xs space-y-0.5">
+                  {s.calories > 0 && <p className="text-slate-300">{s.calories} kcal</p>}
+                  <p className="text-slate-500">
+                    {s.protein_g > 0 && <span className="text-brand-blue mr-1.5">P:{s.protein_g}g</span>}
+                    {s.carbs_g > 0 && <span className="text-brand-orange mr-1.5">C:{s.carbs_g}g</span>}
+                    {s.fat_g > 0 && <span className="text-brand-purple">G:{s.fat_g}g</span>}
+                  </p>
                 </div>
               </div>
             ))}
@@ -422,10 +427,14 @@ function AziTab({ session }) {
               {filteredTemplates.length === 0 ? <p className="text-slate-500 text-sm text-center py-4">Nicio masă găsită.</p>
                 : filteredTemplates.map(t => {
                   const n = calcNutr(t.meal_template_items)
+                  const isOwn = t.user_id === session.user.id
                   return (
                     <button key={t.id} onClick={() => { setSelectedTemplate(t); setPickingTemplate(false); setSearch('') }}
                       className="w-full flex justify-between items-center bg-dark-700 rounded-xl px-3 py-2.5 hover:bg-dark-600 text-left">
-                      <span className="text-sm text-white">{t.name}</span>
+                      <div>
+                        <p className="text-sm text-white">{t.name}</p>
+                        {!isOwn && <p className="text-xs text-brand-blue">🌍 Publică</p>}
+                      </div>
                       <span className="text-xs text-slate-400">{Math.round(n.calories)} kcal</span>
                     </button>
                   )
@@ -580,7 +589,15 @@ function MeseTab({ session, isAdmin }) {
                       className="flex items-center gap-2 flex-1 text-left min-w-0">
                       <span className="text-lg">🍽️</span>
                       <div className="min-w-0">
-                        <p className="font-semibold text-white text-sm">{t.name}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-semibold text-white text-sm">{t.name}</p>
+                          {isOwn && (
+                            <span className={`text-xs px-1.5 py-0.5 rounded-full shrink-0 ${t.is_public ? 'bg-brand-blue/20 text-brand-blue' : 'bg-dark-600 text-slate-500'}`}>
+                              {t.is_public ? '🌍' : '🔒'}
+                            </span>
+                          )}
+                          {!isOwn && t.is_public && <span className="text-xs text-brand-blue shrink-0">🌍</span>}
+                        </div>
                         <p className="text-xs text-slate-400">{Math.round(n.calories)} kcal · {t.meal_template_items.length} alim.</p>
                       </div>
                       <span className="text-xs text-slate-600 ml-2 shrink-0">{isOpen ? '▲' : '▼'}</span>

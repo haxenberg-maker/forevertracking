@@ -289,7 +289,7 @@ function WaterCard({ session, targets }) {
 
 // ─── SUPPLEMENTS ─────────────────────────────────────
 
-function SupplementsCard({ session }) {
+function SupplementsCard({ session, onToggle }) {
   const today = getToday()
   const [supplements, setSupplements] = useState([])
   const [logs, setLogs] = useState({})
@@ -323,6 +323,7 @@ function SupplementsCard({ session }) {
       const { data } = await supabase.from('supplement_logs').insert({ user_id: session.user.id, supplement_id: sup.id, date: today, taken: true }).select().single()
       setLogs(prev => ({ ...prev, [sup.id]: data }))
     }
+    onToggle?.() // refresh calorie ring in Dashboard
   }
 
   async function saveSupplement() {
@@ -899,7 +900,7 @@ export default function Dashboard({ session, isAdmin }) {
       <div className="mb-3"><WaterCard session={session} targets={targets} /></div>
 
       {/* Supplements */}
-      <div className="mb-3"><SupplementsCard session={session} /></div>
+      <div className="mb-3"><SupplementsCard session={session} onToggle={loadData} /></div>
 
       {/* Shopping List */}
       <ShoppingListCard session={session} />
