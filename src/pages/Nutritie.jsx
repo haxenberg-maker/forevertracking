@@ -125,8 +125,15 @@ function AziTab({ session }) {
       mealLog = data
     }
     const gid = genUUID()
+    const pct = mealPct / 100
     await supabase.from('meal_items').insert(
-      selectedTemplate.meal_template_items.map(i => ({ meal_log_id: mealLog.id, food_id: i.foods.id, quantity_g: i.quantity_g, group_id: gid, group_name: selectedTemplate.name }))
+      selectedTemplate.meal_template_items.map(i => ({
+        meal_log_id: mealLog.id,
+        food_id: i.foods.id,
+        quantity_g: Math.round(i.quantity_g * pct * 10) / 10,
+        group_id: gid,
+        group_name: mealPct < 100 ? `${selectedTemplate.name} (${mealPct}%)` : selectedTemplate.name
+      }))
     )
     closeAddModal(); loadMeals()
   }
@@ -367,17 +374,39 @@ function AziTab({ session }) {
                   🔍 {selectedTemplate ? selectedTemplate.name : 'Caută masă...'}
                 </button>
                 {selectedTemplate && (
-                  <div className="bg-brand-blue/10 border border-brand-blue/20 rounded-xl p-3 space-y-1">
+                  <div className="bg-brand-blue/10 border border-brand-blue/20 rounded-xl p-3 space-y-2">
                     {selectedTemplate.meal_template_items.map((i, idx) => (
                       <div key={idx} className="flex justify-between text-xs">
                         <span className="text-slate-300">{i.foods?.name}</span>
-                        <span className="text-slate-400">{i.quantity_g}g</span>
+                        <span className="text-slate-400">
+                          {mealPct < 100
+                            ? <><span className="line-through mr-1 opacity-50">{i.quantity_g}g</span><span className="text-brand-orange">{Math.round(i.quantity_g * mealPct / 10) / 10}g</span></>
+                            : `${i.quantity_g}g`}
+                        </span>
                       </div>
                     ))}
-                    <p className="text-xs text-brand-blue mt-1 pt-1 border-t border-dark-600">{Math.round(calcNutr(selectedTemplate.meal_template_items).calories)} kcal total</p>
+                    <div className="pt-2 border-t border-dark-600">
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="text-xs text-slate-400">Cât ai mâncat din masă?</label>
+                        <span className="text-sm font-bold text-brand-green">{mealPct}%</span>
+                      </div>
+                      <input type="range" min={10} max={100} step={5} value={mealPct}
+                        onChange={e => setMealPct(parseInt(e.target.value))}
+                        className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+                        style={{ accentColor: '#4ade80' }} />
+                      <div className="flex justify-between text-[10px] text-slate-600 mt-0.5">
+                        <span>10%</span><span>50%</span><span>100%</span>
+                      </div>
+                      <p className={`text-xs mt-1 ${mealPct < 100 ? 'text-brand-orange' : 'text-brand-blue'}`}>
+                        {Math.round(calcNutr(selectedTemplate.meal_template_items).calories * mealPct / 100)} kcal
+                        {mealPct < 100 && ` din ${Math.round(calcNutr(selectedTemplate.meal_template_items).calories)} total`}
+                      </p>
+                    </div>
                   </div>
                 )}
-                <button onClick={addTemplate} disabled={!selectedTemplate} className="btn-primary w-full py-3">Adaugă masa întreagă</button>
+                <button onClick={addTemplate} disabled={!selectedTemplate} className="btn-primary w-full py-3">
+                  {mealPct < 100 ? `Adaugă ${mealPct}% din masă` : 'Adaugă masa întreagă'}
+                </button>
               </>
             )}
           </div>

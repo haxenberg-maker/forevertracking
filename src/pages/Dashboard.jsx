@@ -345,7 +345,11 @@ function SupplementsCard({ session, onToggle }) {
   }
 
   async function deleteSupplement(id) {
-    if (confirm('Ștergi suplimentul?')) { await supabase.from('daily_supplements').delete().eq('id', id); loadAll() }
+    if (confirm('Ștergi suplimentul?')) {
+      await supabase.from('daily_supplements').delete().eq('id', id)
+      loadAll()
+      onToggle?.()
+    }
   }
 
   function openEdit(s) {
