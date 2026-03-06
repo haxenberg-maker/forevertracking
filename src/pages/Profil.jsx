@@ -54,7 +54,43 @@ const THEME_VARS = {
     '--t1':'#0f172a','--t2':'#1e293b','--t3':'#334155','--t4':'#475569','--t5':'#64748b','--t6':'#94a3b8',
     '--border':'#cbd5e1',
   },
+  // ── Teme noi moderne ──
+  midnight: {
+    '--bg-900':'#070714','--bg-800':'#0e0e28','--bg-700':'#15153d','--bg-600':'#1e1e52','--bg-500':'#272768',
+    '--accent':'#818cf8','--accent-fg':'#1e1b4b',
+    '--t1':'#eef2ff','--t2':'#e0e7ff','--t3':'#c7d2fe','--t4':'#a5b4fc','--t5':'#818cf8','--t6':'#6366f1',
+    '--border':'#1e1e52',
+  },
+  forest: {
+    '--bg-900':'#030d06','--bg-800':'#071a0d','--bg-700':'#0c2714','--bg-600':'#12361c','--bg-500':'#184626',
+    '--accent':'#34d399','--accent-fg':'#022c22',
+    '--t1':'#ecfdf5','--t2':'#d1fae5','--t3':'#a7f3d0','--t4':'#6ee7b7','--t5':'#34d399','--t6':'#10b981',
+    '--border':'#12361c',
+  },
+  rose: {
+    '--bg-900':'#140508','--bg-800':'#200810','--bg-700':'#30101a','--bg-600':'#421526','--bg-500':'#581b32',
+    '--accent':'#fb7185','--accent-fg':'#4c0519',
+    '--t1':'#fff1f2','--t2':'#ffe4e6','--t3':'#fecdd3','--t4':'#fda4af','--t5':'#fb7185','--t6':'#f43f5e',
+    '--border':'#42152a',
+  },
+  slate: {
+    '--bg-900':'#0c1320','--bg-800':'#131e2e','--bg-700':'#1a293d','--bg-600':'#22364f','--bg-500':'#2b4464',
+    '--accent':'#38bdf8','--accent-fg':'#0c4a6e',
+    '--t1':'#f0f9ff','--t2':'#e0f2fe','--t3':'#bae6fd','--t4':'#93c5fd','--t5':'#60a5fa','--t6':'#3b82f6',
+    '--border':'#1e3352',
+  },
 }
+
+const THEME_META = [
+  { key: 'dark',     label: 'Dark',     preview: ['#0f0f13','#1a1a24','#4ade80'] },
+  { key: 'ocean',    label: 'Ocean',    preview: ['#040d18','#0c1f38','#38bdf8'] },
+  { key: 'vibe',     label: 'Vibe',     preview: ['#120700','#2c1500','#fb923c'] },
+  { key: 'midnight', label: 'Midnight', preview: ['#070714','#15153d','#818cf8'] },
+  { key: 'forest',   label: 'Forest',   preview: ['#030d06','#0c2714','#34d399'] },
+  { key: 'rose',     label: 'Rose',     preview: ['#140508','#30101a','#fb7185'] },
+  { key: 'slate',    label: 'Slate',    preview: ['#0c1320','#1a293d','#38bdf8'] },
+  { key: 'light',    label: 'Light',    preview: ['#f1f5f9','#ffffff','#16a34a'] },
+]
 
 function applyTheme(key) {
   const vars = THEME_VARS[key] || THEME_VARS.dark
@@ -268,7 +304,8 @@ export default function Profil({ session, isAdmin }) {
             <div>
               <p className="font-bold text-white text-lg">{profile.full_name || session.user.email?.split('@')[0]}</p>
               <p className="text-xs text-slate-400">{session.user.email}</p>
-              {isAdmin && <span className="text-xs bg-brand-purple/20 text-brand-purple px-2 py-0.5 rounded-full">Admin</span>}
+              {isAdmin && <span className="text-xs bg-brand-purple/20 text-brand-purple px-2 py-0.5 rounded-full mt-0.5 inline-block">⭐ Administrator</span>}
+              {!isAdmin && profile.account_type === 'elev' && <span className="text-xs bg-brand-blue/20 text-brand-blue px-2 py-0.5 rounded-full mt-0.5 inline-block">🎓 Cont Elev</span>}
             </div>
           </div>
           <button onClick={openEditProfile} className="text-xs bg-dark-700 text-slate-300 px-3 py-2 rounded-xl hover:bg-dark-600">✏️ Editează</button>
@@ -394,20 +431,22 @@ export default function Profil({ session, isAdmin }) {
 
         {/* Theme selector */}
         <div className="border-t border-dark-600 pt-3">
-          <p className="text-sm font-medium text-white mb-2">🎨 Temă culori</p>
-          <div className="grid grid-cols-2 gap-2">
-            {THEMES.map(t => (
+          <p className="text-sm font-medium text-white mb-3">🎨 Temă culori</p>
+          <div className="grid grid-cols-4 gap-2">
+            {THEME_META.map(t => (
               <button key={t.key} onClick={() => { applyTheme(t.key); setActiveTheme(t.key) }}
-                className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border transition-all ${activeTheme === t.key ? 'border-brand-green bg-brand-green/10' : 'border-dark-600 bg-dark-700 hover:bg-dark-600'}`}>
-                <div className="flex gap-1">
-                  {t.preview.map((c, i) => <div key={i} className="w-4 h-4 rounded-full" style={{ backgroundColor: c }} />)}
+                className={`flex flex-col items-center gap-1.5 px-2 py-2.5 rounded-xl border transition-all ${activeTheme === t.key ? 'border-brand-green bg-brand-green/10' : 'border-dark-600 bg-dark-700 hover:bg-dark-600'}`}>
+                {/* Color swatches */}
+                <div className="flex gap-0.5">
+                  {t.preview.map((c, i) => (
+                    <div key={i} className={`h-5 rounded-md ${i === 0 ? 'w-4' : i === 1 ? 'w-3' : 'w-2.5'}`} style={{ backgroundColor: c }} />
+                  ))}
                 </div>
-                <span className={`text-xs font-medium ${activeTheme === t.key ? 'text-brand-green' : 'text-slate-300'}`}>{t.label}</span>
-                {activeTheme === t.key && <span className="text-brand-green text-xs ml-auto">✓</span>}
+                <span className={`text-[10px] font-medium leading-none ${activeTheme === t.key ? 'text-brand-green' : 'text-slate-400'}`}>{t.label}</span>
+                {activeTheme === t.key && <span className="text-brand-green text-[9px] leading-none">✓ activ</span>}
               </button>
             ))}
           </div>
-          <p className="text-xs text-slate-600 mt-2">* Tema Dark e cea standard. Restul sunt experimentale.</p>
         </div>
 
         {/* Install */}

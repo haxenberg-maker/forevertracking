@@ -172,7 +172,7 @@ function ShoppingListCard({ session }) {
           </div>
           <div className="flex gap-2">
             <button onClick={() => moveToStock(selectedItem).then(() => setShowAddFood(false))}
-              className="btn-ghost flex-1 py-3 text-sm">Sară peste</button>
+              className="btn-ghost flex-1 py-3 text-sm">Sări peste</button>
             <button onClick={saveAndMove} disabled={saving || !foodForm.calories}
               className="btn-primary flex-1 py-3 disabled:opacity-50">
               {saving ? 'Se salvează...' : '📦 Mută în stoc'}
@@ -187,7 +187,7 @@ function ShoppingListCard({ session }) {
 
 const dayNames = ['Duminică','Luni','Marți','Miercuri','Joi','Vineri','Sâmbătă']
 const monthNames = ['ian','feb','mar','apr','mai','iun','iul','aug','sep','oct','nov','dec']
-const TYPE_ICON = { running: '🏃', strength: '🏋️', cycling: '🚴', other: '⚡' }
+const TYPE_ICON = { running: '🏃', strength: '🏋️', cycling: '🚴', other: '⚡', task: '✅', medical: '🏥', wellness: '🧘', nutrition: '🥗' }
 const WEEKDAY_LABELS = ['Lu', 'Ma', 'Mi', 'Jo', 'Vi', 'Sâ', 'Du']
 
 function getTodayWeekday() {
@@ -441,6 +441,18 @@ function UpcomingWorkoutsCard({ session }) {
   const [logs, setLogs] = useState({})
   const [showAll, setShowAll] = useState(false)
   const [loading, setLoading] = useState(true)
+  // Feedback modal
+  const [feedbackItem, setFeedbackItem] = useState(null) // schedule entry
+  const [feedbackForm, setFeedbackForm] = useState({ feeling: '', notes: '' })
+  const [savingFb, setSavingFb] = useState(false)
+
+  const FEELINGS = [
+    { key: 'great',  label: '🔥 Excelent' },
+    { key: 'good',   label: '💪 Bine' },
+    { key: 'ok',     label: '😐 Ok' },
+    { key: 'hard',   label: '😰 Greu' },
+    { key: 'bad',    label: '😞 Rău' },
+  ]
 
   useEffect(() => { load() }, [])
 
@@ -491,18 +503,62 @@ function UpcomingWorkoutsCard({ session }) {
   }
 
   async function toggle(s) {
+    // Block future workouts from being checked
+    if (s._date !== today) return
+
     const uid = session.user.id
     const key = `${s.id}_${s._date}`
     const existing = logs[key]
+
+    // If already done — just untoggle (no feedback needed)
+    if (existing?.done) {
+      await supabase.from('workout_schedule_logs').update({ done: false }).eq('id', existing.id)
+      setLogs(prev => ({ ...prev, [key]: { ...existing, done: false } }))
+      return
+    }
+
+    // Check if assigned by admin — open feedback modal
+    try {
+      const meta = JSON.parse(s.notes || '{}')
+      if (meta.assigned_by) {
+        setFeedbackItem(s)
+        setFeedbackForm({ feeling: '', notes: '' })
+        return
+      }
+    } catch {}
+
+    // Normal toggle
     if (existing) {
-      const newDone = !existing.done
-      await supabase.from('workout_schedule_logs').update({ done: newDone }).eq('id', existing.id)
-      setLogs(prev => ({ ...prev, [key]: { ...existing, done: newDone } }))
+      await supabase.from('workout_schedule_logs').update({ done: true }).eq('id', existing.id)
+      setLogs(prev => ({ ...prev, [key]: { ...existing, done: true } }))
     } else {
       const { data } = await supabase.from('workout_schedule_logs')
         .insert({ user_id: uid, schedule_id: s.id, date: s._date, done: true }).select().single()
       setLogs(prev => ({ ...prev, [key]: data }))
     }
+  }
+
+  async function saveFeedback() {
+    if (!feedbackItem || !feedbackForm.feeling) return
+    setSavingFb(true)
+    const uid = session.user.id
+    const key = `${feedbackItem.id}_${feedbackItem._date}`
+    const existing = logs[key]
+    const feedbackData = { feeling: feedbackForm.feeling, notes: feedbackForm.notes }
+
+    if (existing) {
+      await supabase.from('workout_schedule_logs').update({
+        done: true, feedback: JSON.stringify(feedbackData)
+      }).eq('id', existing.id)
+      setLogs(prev => ({ ...prev, [key]: { ...existing, done: true, feedback: JSON.stringify(feedbackData) } }))
+    } else {
+      const { data } = await supabase.from('workout_schedule_logs')
+        .insert({ user_id: uid, schedule_id: feedbackItem.id, date: feedbackItem._date, done: true, feedback: JSON.stringify(feedbackData) })
+        .select().single()
+      setLogs(prev => ({ ...prev, [key]: data }))
+    }
+    setSavingFb(false)
+    setFeedbackItem(null)
   }
 
   if (loading) return null
@@ -511,20 +567,51 @@ function UpcomingWorkoutsCard({ session }) {
 
   const WorkoutRow = ({ s }) => {
     const done = logs[`${s.id}_${s._date}`]?.done === true
+    const isFuture = s._date !== today
+    const logEntry = logs[`${s.id}_${s._date}`]
+    const feedback = logEntry?.feedback ? (() => { try { return JSON.parse(logEntry.feedback) } catch { return null } })() : null
+    const meta = (() => { try { return JSON.parse(s.notes || '{}') } catch { return {} } })()
+    const isAdminAssigned = !!meta.assigned_by
+
+    const DIFF_COLORS = { easy: 'text-green-400', medium: 'text-yellow-400', hard: 'text-orange-400', extreme: 'text-red-400' }
+    const DIFF_LABELS = { easy: '🟢', medium: '🟡', hard: '🟠', extreme: '🔴' }
+    const IMP_LABEL   = meta.importance === 'important' ? '🔥' : null
+
     return (
-      <button onClick={() => toggle(s)}
-        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-left ${done ? 'bg-brand-green/10 border border-brand-green/30' : 'bg-dark-700 hover:bg-dark-600'}`}>
-        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${done ? 'bg-brand-green border-brand-green' : 'border-slate-600'}`}>
+      <button onClick={() => !isFuture && toggle(s)}
+        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-left
+          ${isFuture ? 'opacity-50 cursor-default bg-dark-700' :
+            done ? 'bg-brand-green/10 border border-brand-green/30' : 'bg-dark-700 hover:bg-dark-600'}`}>
+        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0
+          ${isFuture ? 'border-slate-700' : done ? 'bg-brand-green border-brand-green' : 'border-slate-600'}`}>
           {done && <span className="text-dark-900 text-xs font-bold">✓</span>}
         </div>
         <span className="text-base">{TYPE_ICON[s.type] || '⚡'}</span>
         <div className="flex-1 min-w-0">
-          <p className={`text-sm font-medium truncate ${done ? 'text-brand-green line-through' : 'text-white'}`}>{s.name}</p>
-          {s._dayLabel !== 'Azi' && <p className="text-xs text-slate-500">{s._dayLabel}</p>}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <p className={`text-sm font-medium truncate ${done ? 'text-brand-green line-through' : isFuture ? 'text-slate-500' : 'text-white'}`}>{s.name}</p>
+            {IMP_LABEL && <span className="text-xs shrink-0">{IMP_LABEL}</span>}
+            {meta.difficulty && <span className={`text-xs shrink-0 ${DIFF_COLORS[meta.difficulty] || ''}`}>{DIFF_LABELS[meta.difficulty] || ''}</span>}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap mt-0.5">
+            {s._dayLabel !== 'Azi' && <span className="text-xs text-slate-500">{s._dayLabel}</span>}
+            {meta.time && <span className="text-xs text-slate-500">⏰ {meta.time}</span>}
+            {meta.distance_km && <span className="text-xs text-slate-500">📍 {meta.distance_km}km</span>}
+          </div>
+          {feedback && (
+            <p className="text-xs text-brand-blue mt-0.5">
+              {FEELINGS.find(f => f.key === feedback.feeling)?.label || feedback.feeling}
+              {feedback.notes && ` · "${feedback.notes}"`}
+            </p>
+          )}
         </div>
+        {isAdminAssigned && !done && !isFuture && (
+          <span className="text-xs text-slate-500 shrink-0">💬</span>
+        )}
       </button>
     )
   }
+
 
   return (
     <div className="card mb-3">
@@ -547,14 +634,12 @@ function UpcomingWorkoutsCard({ session }) {
         </button>
       ) : (
         <div className="space-y-2">
-          {/* Azi */}
           {todaySchedules.length > 0 ? (
             todaySchedules.map((s, i) => <WorkoutRow key={`${s.id}_${i}`} s={s} />)
           ) : (
             <p className="text-xs text-slate-500 text-center py-1">Niciun antrenament planificat azi</p>
           )}
 
-          {/* Viitoare - toggle */}
           {futureSchedules.length > 0 && (
             <>
               <button onClick={() => setShowAll(p => !p)}
@@ -564,6 +649,49 @@ function UpcomingWorkoutsCard({ session }) {
               {showAll && futureSchedules.map((s, i) => <WorkoutRow key={`${s.id}_future_${i}`} s={s} />)}
             </>
           )}
+        </div>
+      )}
+
+      {/* Feedback Modal */}
+      {feedbackItem && (
+        <div className="modal-overlay" onClick={() => setFeedbackItem(null)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <h2 className="text-lg font-bold text-white mb-1">💬 Cum a fost?</h2>
+            <p className="text-sm text-slate-400 mb-4">{feedbackItem.name}</p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs text-slate-400 block mb-2">Cum m-am simțit</label>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {FEELINGS.map(f => (
+                    <button key={f.key} onClick={() => setFeedbackForm(p => ({ ...p, feeling: f.key }))}
+                      className={`py-2 rounded-xl text-xs font-medium transition-all border text-center ${feedbackForm.feeling === f.key
+                        ? 'border-brand-green bg-brand-green/15 text-brand-green'
+                        : 'border-dark-600 bg-dark-700 text-slate-400'}`}>
+                      {f.label.split(' ')[0]}<br/>
+                      <span className="text-[10px]">{f.label.split(' ')[1]}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Notițe (opțional)</label>
+                <textarea className="input resize-none" rows={3}
+                  placeholder="ex: Am simțit oboseală la seturi 3+, tempo bun..."
+                  value={feedbackForm.notes}
+                  onChange={e => setFeedbackForm(p => ({ ...p, notes: e.target.value }))} />
+              </div>
+
+              <div className="flex gap-2">
+                <button onClick={() => setFeedbackItem(null)} className="btn-ghost flex-1 py-3">Anulează</button>
+                <button onClick={saveFeedback} disabled={!feedbackForm.feeling || savingFb}
+                  className="btn-primary flex-1 py-3 disabled:opacity-50">
+                  {savingFb ? 'Se salvează...' : '✓ Gata, bifează!'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

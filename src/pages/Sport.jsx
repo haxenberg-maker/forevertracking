@@ -229,13 +229,14 @@ function AlergareTab({ session }) {
 
 // ─── Forță ─────────────────────────────────────────
 
-function FortaTab({ session }) {
+function FortaTab({ session, isAdmin }) {
   const today = getToday()
   const [workouts, setWorkouts] = useState([])
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({ date: today, name: '', notes: '', start_time: '' })
   const [exercises, setExercises] = useState([{ exercise_name: '', sets: '3', reps: '10', weight_kg: '0' }])
   const [loading, setLoading] = useState(true)
+  const [students, setStudents] = useState([])
   const { syncing, syncMsg, stravaConnected, syncStrava } = useStravaSync(session, loadWorkouts)
 
   useEffect(() => { loadWorkouts() }, [])
@@ -243,11 +244,29 @@ function FortaTab({ session }) {
   async function loadWorkouts() {
     setLoading(true)
     const { data } = await supabase.from('workout_logs').select(`
-      id, date, name, notes, type,
+      id, date, name, notes, type, user_id,
       workout_exercises(id, exercise_name, sets, reps, weight_kg)
     `).eq('user_id', session.user.id).eq('type', 'strength')
       .order('date', { ascending: false }).limit(20)
-    setWorkouts(data || [])
+
+    let all = data || []
+
+    if (isAdmin) {
+      const { data: studentWo } = await supabase.from('workout_logs').select(`
+        id, date, name, notes, type, user_id,
+        workout_exercises(id, exercise_name, sets, reps, weight_kg)
+      `).neq('user_id', session.user.id).eq('type', 'strength')
+        .like('notes', `%[admin:${session.user.id}]%`)
+        .order('date', { ascending: false }).limit(30)
+      if (studentWo?.length) {
+        const ids = [...new Set(studentWo.map(w => w.user_id))]
+        const { data: profiles } = await supabase.from('user_profiles').select('user_id, full_name, email').in('user_id', ids)
+        setStudents(profiles || [])
+        all = [...all, ...studentWo].sort((a, b) => b.date.localeCompare(a.date))
+      }
+    }
+
+    setWorkouts(all)
     setLoading(false)
   }
 
@@ -289,6 +308,11 @@ function FortaTab({ session }) {
   }
 
   async function deleteWorkout(id) {
+    const wo = workouts.find(w => w.id === id)
+    // Elevul nu poate sterge antrenamentele create de admin
+    if (wo?.user_id === session.user.id && wo?.notes?.includes('[admin:')) {
+      alert('Acest antrenament a fost creat de antrenor și nu poate fi șters.'); return
+    }
     if (confirm('Ștergi antrenamentul?')) {
       await supabase.from('workout_logs').delete().eq('id', id)
       loadWorkouts()
@@ -321,14 +345,26 @@ function FortaTab({ session }) {
           </div>
         ) : (
           <div className="space-y-3">
-            {workouts.map(w => (
+            {workouts.map(w => {
+              const studentProfile = students.find(s => s.user_id === w.user_id)
+              const isAdminAssigned = w.notes?.includes('[admin:')
+              const canDelete = !isAdminAssigned || isAdmin
+              const cleanName = w.name?.replace(/\s*\[admin:[^\]]+\]/g, '')
+              return (
               <div key={w.id} className="card">
                 <div className="flex items-start justify-between mb-2">
                   <div>
-                    <p className="font-semibold text-white">{w.name}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-white">{cleanName}</p>
+                      {isAdminAssigned && <span className="text-xs bg-brand-blue/20 text-brand-blue px-1.5 py-0.5 rounded-md">👤 Admin</span>}
+                    </div>
                     <p className="text-xs text-slate-400">📅 {new Date(w.date).toLocaleDateString('ro-RO')} · {w.workout_exercises?.length || 0} exerciții</p>
+                    {studentProfile && <p className="text-xs text-brand-blue mt-0.5">🎓 {studentProfile.full_name || studentProfile.email}</p>}
                   </div>
-                  <button onClick={() => deleteWorkout(w.id)} className="text-slate-600 hover:text-red-400 transition-colors text-lg">×</button>
+                  {canDelete
+                    ? <button onClick={() => deleteWorkout(w.id)} className="text-slate-600 hover:text-red-400 transition-colors text-lg">×</button>
+                    : <span className="text-xs text-slate-600">🔒</span>
+                  }
                 </div>
                 {w.workout_exercises?.length > 0 && (
                   <div className="space-y-1">
@@ -340,9 +376,9 @@ function FortaTab({ session }) {
                     ))}
                   </div>
                 )}
-                {w.notes && <p className="text-xs text-slate-500 mt-2 italic">"{w.notes}"</p>}
               </div>
-            ))}
+              )
+            })}
           </div>
         )
       }
@@ -412,21 +448,28 @@ function FortaTab({ session }) {
 
 // ─── Calendar ────────────────────────────────────────
 
-function CalendarTab({ session }) {
+function CalendarTab({ session, isAdmin }) {
   const today = getToday()
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [monthData, setMonthData] = useState({})
-  const [scheduledByDate, setScheduledByDate] = useState({}) // future planned
+  const [scheduledByDate, setScheduledByDate] = useState({})
   const [selectedDate, setSelectedDate] = useState(null)
   const [selectedIsFuture, setSelectedIsFuture] = useState(false)
   const [dayDetail, setDayDetail] = useState(null)
-  const [futurePlan, setFuturePlan] = useState([]) // scheduled workouts for future day
+  const [futurePlan, setFuturePlan] = useState([])
   const [detailLoading, setDetailLoading] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
   const [addDate, setAddDate] = useState(today)
-  const [addForm, setAddForm] = useState({ name: '', type: 'strength' })
+  const [addForm, setAddForm] = useState({ name: '', type: 'strength', distance_km: '', student_id: '' })
+  const [students, setStudents] = useState([]) // elevi list for admin
 
   useEffect(() => { loadMonthData() }, [currentMonth])
+  useEffect(() => { if (isAdmin) loadStudents() }, [isAdmin])
+
+  async function loadStudents() {
+    const { data } = await supabase.from('user_profiles').select('user_id, full_name, email').eq('account_type', 'elev')
+    setStudents(data || [])
+  }
 
   async function loadMonthData() {
     const year = currentMonth.getFullYear()
@@ -551,9 +594,29 @@ function CalendarTab({ session }) {
 
   async function saveAdd() {
     if (!addForm.name) return
-    await supabase.from('workout_logs').insert({ user_id: session.user.id, date: addDate, name: addForm.name, type: addForm.type })
-    setShowAddModal(false); setAddForm({ name: '', type: 'strength' }); loadMonthData()
-    // If future day modal open, refresh
+    const targetUser = (isAdmin && addForm.student_id) ? addForm.student_id : session.user.id
+    const insertData = {
+      user_id: targetUser,
+      date: addDate,
+      name: addForm.name,
+      type: addForm.type,
+      notes: isAdmin && addForm.student_id ? `[admin:${session.user.id}]` : null,
+    }
+    if (addForm.type === 'running' && addForm.distance_km) {
+      // For running with km, use running_logs
+      await supabase.from('running_logs').insert({
+        user_id: targetUser,
+        date: addDate,
+        distance_km: parseFloat(addForm.distance_km),
+        duration_min: 0,
+        notes: addForm.name + (isAdmin && addForm.student_id ? ` [admin:${session.user.id}]` : ''),
+      })
+    } else {
+      await supabase.from('workout_logs').insert(insertData)
+    }
+    setShowAddModal(false)
+    setAddForm({ name: '', type: 'strength', distance_km: '', student_id: '' })
+    loadMonthData()
     if (selectedDate === addDate && selectedIsFuture) loadFuturePlan(addDate)
   }
 
@@ -804,6 +867,26 @@ function CalendarTab({ session }) {
               onChange={e => setAddForm(p => ({ ...p, name: e.target.value }))}
               onKeyDown={e => e.key === 'Enter' && saveAdd()} autoFocus />
           </div>
+          {(addForm.type === 'running' || addForm.type === 'cycling') && (
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Distanță (km) — opțional</label>
+              <input className="input" type="number" placeholder="ex: 5.0" value={addForm.distance_km}
+                onChange={e => setAddForm(p => ({ ...p, distance_km: e.target.value }))} />
+            </div>
+          )}
+          {isAdmin && students.length > 0 && (
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Alocă la elev (opțional)</label>
+              <select className="input" value={addForm.student_id}
+                onChange={e => setAddForm(p => ({ ...p, student_id: e.target.value }))}>
+                <option value="">— Antrenament propriu —</option>
+                {students.map(s => (
+                  <option key={s.user_id} value={s.user_id}>{s.full_name || s.email}</option>
+                ))}
+              </select>
+              {addForm.student_id && <p className="text-xs text-brand-blue mt-1">✓ Se va adăuga la elevul selectat</p>}
+            </div>
+          )}
           <button onClick={saveAdd} disabled={!addForm.name} className="btn-primary w-full py-3">Salvează</button>
         </div>
       </Modal>
@@ -1048,64 +1131,268 @@ function BicicletaTab({ session }) {
 
 const WEEKDAY_LABELS = ['Lu', 'Ma', 'Mi', 'Jo', 'Vi', 'Sâ', 'Du']
 const SPORT_TYPES = [
-  { key: 'strength', label: '🏋️ Forță' },
-  { key: 'running', label: '🏃 Alergare' },
-  { key: 'cycling', label: '🚴 Bicicletă' },
-  { key: 'other', label: '⚡ Altul' },
+  { key: 'strength', label: '🏋️ Forță',    color: 'brand-orange' },
+  { key: 'running',  label: '🏃 Alergare',  color: 'brand-blue' },
+  { key: 'cycling',  label: '🚴 Bicicletă', color: 'brand-green' },
+  { key: 'other',    label: '⚡ Altul',     color: 'brand-purple' },
+  { key: 'task',     label: '✅ Task',      color: 'brand-blue' },
+  { key: 'medical',  label: '🏥 Medical',   color: 'brand-pink' },
+  { key: 'wellness', label: '🧘 Wellness',  color: 'brand-green' },
+  { key: 'nutrition',label: '🥗 Nutriție',  color: 'brand-green' },
 ]
+const IMPORTANCE = [
+  { key: 'important', label: '🔥 Important!', cls: 'border-red-500/60 bg-red-500/10 text-red-400' },
+  { key: 'routine',   label: '✅ Rutină',     cls: 'border-brand-green/60 bg-brand-green/10 text-brand-green' },
+]
+const DIFFICULTY = [
+  { key: 'easy',    label: '🟢 Ușor',  cls: 'border-green-500/60 bg-green-500/10 text-green-400' },
+  { key: 'medium',  label: '🟡 Mediu', cls: 'border-yellow-500/60 bg-yellow-500/10 text-yellow-400' },
+  { key: 'hard',    label: '🟠 Greu',  cls: 'border-orange-500/60 bg-orange-500/10 text-orange-400' },
+  { key: 'extreme', label: '🔴 Extrem',cls: 'border-red-600/60 bg-red-600/10 text-red-500' },
+]
+const RUN_TYPES = ['Ușor', 'Interval', 'Tempo', 'Fartlek', 'Cursă', 'Recuperare']
+const BIKE_TYPES_PLAN = ['Șosea', 'MTB', 'Indoor', 'Viteză', 'Anduranță']
 
-function PlanTab({ session }) {
-  const today = getToday()
-  const [schedules, setSchedules] = useState([])
-  const [exceptions, setExceptions] = useState({}) // { schedule_id: [dates] }
+const EMPTY_FORM = {
+  name: '', type: 'strength',
+  recurrence: 'weekly', weekdays: [], scheduled_date: '',
+  importance: 'routine', difficulty: 'medium',
+  time: '',
+  // running / cycling
+  distance_km: '', pace: '', activity_subtype: '',
+  // strength exercises
+  exercises: [{ name: '', sets: '3', reps: '10' }],
+  // admin
+  student_id: '',
+}
+
+function PlanTab({ session, isAdmin }) {
+  const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` })()
+  const [adminProfiles, setAdminProfiles] = useState({})
+  const [mySchedules, setMySchedules] = useState([])
+  const [studentSchedules, setStudentSchedules] = useState([]) // admin view: elev plans
+  const [studentProfiles, setStudentProfiles] = useState({}) // uid -> {full_name, email}
+  const [exceptions, setExceptions] = useState({})
   const [showModal, setShowModal] = useState(false)
   const [showExceptModal, setShowExceptModal] = useState(false)
   const [exceptSchedule, setExceptSchedule] = useState(null)
   const [newExceptDate, setNewExceptDate] = useState(today)
   const [newExceptReason, setNewExceptReason] = useState('')
   const [editItem, setEditItem] = useState(null)
-  const [form, setForm] = useState({ name: '', type: 'strength', recurrence: 'weekly', weekdays: [], scheduled_date: today })
+  const [form, setForm] = useState({ ...EMPTY_FORM, scheduled_date: today })
+  const [students, setStudents] = useState([])
   const [loading, setLoading] = useState(true)
+  const [activeSection, setActiveSection] = useState('mine') // 'mine' | 'students'
 
-  useEffect(() => { load() }, [])
+  const [studentFeedback, setStudentFeedback] = useState({}) // scheduleId -> [{date, feeling, notes, studentName}]
+
+  useEffect(() => { load() }, [isAdmin])
 
   async function load() {
     setLoading(true)
     const uid = session.user.id
-    const [{ data: sched }, { data: excepts }] = await Promise.all([
-      supabase.from('workout_schedules').select('*').eq('user_id', uid).order('created_at'),
-      supabase.from('workout_schedule_exceptions').select('*').eq('user_id', uid),
-    ])
-    setSchedules(sched || [])
-    const map = {}
+
+    // 1. Load own schedules
+    const { data: sched } = await supabase.from('workout_schedules')
+      .select('*').eq('user_id', uid).order('created_at')
+
+    // 2. Load exceptions for own schedules
+    const { data: excepts } = await supabase.from('workout_schedule_exceptions')
+      .select('*').eq('user_id', uid)
+
+    // 3. If admin, load ALL student schedules
+    let studentSched = []
+    if (isAdmin) {
+      await loadStudents()
+      const { data: all, error: schedErr } = await supabase.from('workout_schedules')
+        .select('*')
+        .neq('user_id', uid)
+        .order('created_at')
+      if (schedErr) console.error('studentSched error:', schedErr)
+      // Filter client-side to those assigned by this admin
+      studentSched = (all || []).filter(s => {
+        try { return JSON.parse(s.notes || '{}').assigned_by === uid } catch { return false }
+      })
+      console.log('all other schedules:', all?.length, 'filtered for admin:', studentSched.length)
+    }
+
+    // 4. Load student profiles for names
+    if (studentSched.length) {
+      const ids = [...new Set(studentSched.map(s => s.user_id))]
+      const { data: profiles } = await supabase.from('user_profiles')
+        .select('user_id, full_name, email').in('user_id', ids)
+      const pmap = {}
+      ;(profiles || []).forEach(p => { pmap[p.user_id] = p })
+      setStudentProfiles(pmap)
+    }
+
+    // 5. Load admin profiles for "assigned by" display (for elev view)
+    const adminIds = [...new Set((sched || []).map(s => {
+      try { return JSON.parse(s.notes || '{}').assigned_by } catch { return null }
+    }).filter(Boolean))]
+    if (adminIds.length) {
+      const { data: aprof } = await supabase.from('user_profiles')
+        .select('user_id, full_name, email').in('user_id', adminIds)
+      console.log('adminIds:', adminIds, 'aprof:', aprof)
+      const amap = {}
+      ;(aprof || []).forEach(p => { amap[p.user_id] = p })
+      setAdminProfiles(amap)
+    } else {
+      console.log('no adminIds found in sched:', (sched||[]).map(s => s.notes))
+      setAdminProfiles({})
+    }
+
+    const excMap = {}
     ;(excepts || []).forEach(e => {
-      if (!map[e.schedule_id]) map[e.schedule_id] = []
-      map[e.schedule_id].push(e)
+      if (!excMap[e.schedule_id]) excMap[e.schedule_id] = []
+      excMap[e.schedule_id].push(e)
     })
-    setExceptions(map)
+
+    setMySchedules(sched || [])
+    setStudentSchedules(studentSched)
+    setExceptions(excMap)
+
+    // Load feedback for student schedules (admin view)
+    if (studentSched.length) {
+      const ids = studentSched.map(s => s.id)
+      const { data: fbLogs } = await supabase.from('workout_schedule_logs')
+        .select('*').in('schedule_id', ids).eq('done', true).not('feedback', 'is', null)
+      if (fbLogs?.length) {
+        const fbMap = {}
+        fbLogs.forEach(l => {
+          if (!fbMap[l.schedule_id]) fbMap[l.schedule_id] = []
+          let fb = null
+          try { fb = JSON.parse(l.feedback) } catch {}
+          if (fb) {
+            const sp = studentProfiles[l.user_id]
+            fbMap[l.schedule_id].push({
+              date: l.date, feeling: fb.feeling, notes: fb.notes,
+              studentName: sp?.full_name || sp?.email || 'Elev'
+            })
+          }
+        })
+        setStudentFeedback(fbMap)
+      }
+    }
+
     setLoading(false)
   }
 
+  // Keep old `schedules` as alias for non-admin render
+  const schedules = mySchedules
+
+  function parseMeta(s) {
+    try { return JSON.parse(s.notes || '{}') } catch { return {} }
+  }
+
+  async function loadStudents() {
+    const { data } = await supabase.from('user_profiles').select('user_id, full_name, email').eq('account_type', 'elev')
+    setStudents(data || [])
+  }
+
   function openAdd() {
-    setForm({ name: '', type: 'strength', recurrence: 'weekly', weekdays: [], scheduled_date: today })
+    setForm({ ...EMPTY_FORM, scheduled_date: today })
     setEditItem(null); setShowModal(true)
   }
+
   function openEdit(s) {
-    setForm({ name: s.name, type: s.type, recurrence: s.recurrence, weekdays: s.weekdays || [], scheduled_date: s.scheduled_date || today })
+    const meta = parseMeta(s)
+    // When editing a student's schedule, keep track of who it belongs to
+    const isStudentSchedule = s.user_id !== session.user.id
+    setForm({
+      name: s.name, type: s.type,
+      recurrence: s.recurrence, weekdays: s.weekdays || [], scheduled_date: s.scheduled_date || today,
+      importance: meta.importance || 'routine',
+      difficulty: meta.difficulty || 'medium',
+      time: meta.time || '',
+      distance_km: meta.distance_km || '',
+      pace: meta.pace || '',
+      activity_subtype: meta.activity_subtype || '',
+      exercises: meta.exercises?.length ? meta.exercises : [{ name: '', sets: '3', reps: '10' }],
+      student_id: isStudentSchedule ? s.user_id : '',
+      _existing_user_id: s.user_id, // preserve target user on edit
+    })
     setEditItem(s); setShowModal(true)
   }
+
   function toggleWeekday(d) {
     setForm(p => ({ ...p, weekdays: p.weekdays.includes(d) ? p.weekdays.filter(x => x !== d) : [...p.weekdays, d] }))
   }
+
+  function setEx(idx, key, val) {
+    setForm(p => {
+      const ex = [...p.exercises]
+      ex[idx] = { ...ex[idx], [key]: val }
+      return { ...p, exercises: ex }
+    })
+  }
+  function addExercise() { setForm(p => ({ ...p, exercises: [...p.exercises, { name: '', sets: '3', reps: '10' }] })) }
+  function removeExercise(idx) { setForm(p => ({ ...p, exercises: p.exercises.filter((_, i) => i !== idx) })) }
+
   async function save() {
     if (!form.name) return
-    const data = { user_id: session.user.id, name: form.name, type: form.type, recurrence: form.recurrence, weekdays: form.weekdays, scheduled_date: form.recurrence === 'once' ? form.scheduled_date : null }
-    if (editItem) await supabase.from('workout_schedules').update(data).eq('id', editItem.id)
-    else await supabase.from('workout_schedules').insert(data)
-    setShowModal(false); load()
+    // On edit: use existing user_id. On create: use selected student or self
+    const targetUserId = editItem
+      ? (form._existing_user_id || session.user.id)
+      : (isAdmin && form.student_id ? form.student_id : session.user.id)
+
+    const meta = {
+      importance: form.importance,
+      difficulty: form.difficulty,
+      time: form.time,
+      ...(form.type === 'running' || form.type === 'cycling' ? {
+        distance_km: form.distance_km,
+        pace: form.pace,
+        activity_subtype: form.activity_subtype,
+      } : {}),
+      ...(form.type === 'strength' ? {
+        exercises: form.exercises.filter(e => e.name),
+      } : {}),
+      ...(isAdmin && (form.student_id || form._existing_user_id !== session.user.id)
+        ? { assigned_by: session.user.id } : {}),
+    }
+
+    const data = {
+      user_id: targetUserId,
+      name: form.name,
+      type: form.type,
+      recurrence: form.recurrence,
+      weekdays: form.weekdays,
+      scheduled_date: form.recurrence === 'once' ? form.scheduled_date : null,
+      notes: JSON.stringify(meta),
+    }
+
+    if (editItem) {
+      const { error } = await supabase.from('workout_schedules').update(data).eq('id', editItem.id)
+      if (error) { alert('Update error: ' + error.message); return }
+    } else {
+      // Support assigning to multiple students at once
+      const targets = (isAdmin && form.student_ids?.length)
+        ? form.student_ids
+        : [targetUserId]
+
+      for (const uid of targets) {
+        const { error } = await supabase.from('workout_schedules').insert({
+          ...data, user_id: uid,
+          notes: JSON.stringify({ ...meta, assigned_by: isAdmin && uid !== session.user.id ? session.user.id : undefined })
+        })
+        if (error) { alert('Insert error: ' + error.message + '\n' + JSON.stringify(data)); return }
+      }
+    }
+    setShowModal(false)
+    await load()
   }
+
   async function del(id) {
-    if (confirm('Ștergi antrenamentul programat?')) { await supabase.from('workout_schedules').delete().eq('id', id); load() }
+    const s = [...mySchedules, ...studentSchedules].find(x => x.id === id)
+    const meta = parseMeta(s)
+    if (!isAdmin && meta.assigned_by) {
+      alert('Acest antrenament a fost creat de antrenorul tău și nu poate fi șters.'); return
+    }
+    if (confirm('Ștergi antrenamentul planificat?')) {
+      await supabase.from('workout_schedules').delete().eq('id', id)
+      load()
+    }
   }
 
   function openExceptions(s) { setExceptSchedule(s); setNewExceptDate(today); setNewExceptReason(''); setShowExceptModal(true) }
@@ -1129,79 +1416,182 @@ function PlanTab({ session }) {
     return `🔁 ${s.weekdays.sort().map(d => WEEKDAY_LABELS[d]).join(', ')}`
   }
 
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-slate-500">Planul apare în Dashboard în ziua potrivită.</p>
-        <button onClick={openAdd} className="btn-primary px-4 py-2 text-sm">+ Adaugă</button>
-      </div>
+  const diffInfo = (key) => DIFFICULTY.find(d => d.key === key)
+  const impInfo  = (key) => IMPORTANCE.find(i => i.key === key)
 
-      {loading ? <p className="text-center text-slate-500 text-sm py-4">Se încarcă...</p>
-        : schedules.length === 0 ? (
-          <div className="card text-center py-8">
-            <p className="text-4xl mb-2">📋</p>
-            <p className="text-slate-400 text-sm mb-3">Niciun antrenament planificat.</p>
-            <button onClick={openAdd} className="btn-primary px-6 py-2">+ Plan nou</button>
+  function renderScheduleCard(s, isStudentCard) {
+    const meta = parseMeta(s)
+    const diff = diffInfo(meta.difficulty)
+    const imp  = impInfo(meta.importance)
+    const assignedByProfile = meta.assigned_by ? adminProfiles[meta.assigned_by] : null
+    const assignedByName = assignedByProfile?.full_name || assignedByProfile?.email
+    const exceptCount = (exceptions[s.id] || []).length
+    return (
+      <div key={s.id} className="card space-y-2">
+        <div className="flex items-start gap-3">
+          <span className="text-2xl mt-0.5">{SPORT_TYPES.find(t => t.key === s.type)?.label.split(' ')[0] || '⚡'}</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-white">{s.name}</p>
+            <p className="text-xs text-slate-400 mt-0.5">{recurrenceLabel(s)}{meta.time ? ` · ⏰ ${meta.time}` : ''}</p>
           </div>
-        ) : (
-          <div className="space-y-2">
-            {schedules.map(s => {
-              const exceptCount = (exceptions[s.id] || []).length
-              return (
-                <div key={s.id} className="card">
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">{SPORT_TYPES.find(t => t.key === s.type)?.label.split(' ')[0] || '⚡'}</span>
-                    <div className="flex-1">
-                      <p className="text-sm font-semibold text-white">{s.name}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">{recurrenceLabel(s)}</p>
-                      {exceptCount > 0 && <p className="text-xs text-brand-orange mt-0.5">⚠️ {exceptCount} excepție{exceptCount > 1 ? 'i' : ''}</p>}
-                    </div>
-                    <div className="flex gap-1.5">
-                      {s.recurrence === 'weekly' && (
-                        <button onClick={() => openExceptions(s)} className="text-xs bg-brand-orange/10 text-brand-orange px-2.5 py-1.5 rounded-lg hover:bg-brand-orange/20" title="Excepții">🚫</button>
-                      )}
-                      <button onClick={() => openEdit(s)} className="text-xs bg-dark-700 text-slate-300 px-2.5 py-1.5 rounded-lg hover:bg-dark-600">✏️</button>
-                      <button onClick={() => del(s.id)} className="text-xs bg-red-500/10 text-red-400 px-2.5 py-1.5 rounded-lg hover:bg-red-500/20">🗑</button>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
+          <div className="flex gap-1.5 shrink-0">
+            {s.recurrence === 'weekly' && !isStudentCard && (
+              <button onClick={() => openExceptions(s)} className="text-xs bg-brand-orange/10 text-brand-orange px-2 py-1.5 rounded-lg hover:bg-brand-orange/20">🚫</button>
+            )}
+            {(isAdmin || !meta.assigned_by) && (
+              <button onClick={() => openEdit(s)} className="text-xs bg-dark-700 text-slate-300 px-2 py-1.5 rounded-lg hover:bg-dark-600">✏️</button>
+            )}
+            {(isAdmin || !meta.assigned_by) && (
+              <button onClick={() => del(s.id)} className="text-xs bg-red-500/10 text-red-400 px-2 py-1.5 rounded-lg hover:bg-red-500/20">🗑</button>
+            )}
+            {!isAdmin && meta.assigned_by && (
+              <span className="text-xs text-slate-600 px-2 py-1.5">🔒</span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {imp  && <span className={`text-xs px-2 py-0.5 rounded-full border ${imp.cls}`}>{imp.label}</span>}
+          {diff && <span className={`text-xs px-2 py-0.5 rounded-full border ${diff.cls}`}>{diff.label}</span>}
+          {(meta.distance_km || meta.pace) && (
+            <span className="text-xs bg-brand-blue/10 text-brand-blue border border-brand-blue/30 px-2 py-0.5 rounded-full">
+              {meta.distance_km && `${meta.distance_km} km`}{meta.pace && ` · ${meta.pace} min/km`}
+            </span>
+          )}
+          {meta.activity_subtype && <span className="text-xs bg-dark-600 text-slate-400 px-2 py-0.5 rounded-full">{meta.activity_subtype}</span>}
+          {exceptCount > 0 && <span className="text-xs text-brand-orange">⚠️ {exceptCount} excepție</span>}
+        </div>
+
+        {s.type === 'strength' && meta.exercises?.length > 0 && (
+          <div className="space-y-1 pt-1 border-t border-dark-600">
+            {meta.exercises.map((e, i) => (
+              <div key={i} className="flex items-center justify-between bg-dark-700 rounded-lg px-2.5 py-1.5 text-xs">
+                <span className="text-slate-200">{e.name}</span>
+                <span className="text-slate-400">{e.sets} × {e.reps} rep</span>
+              </div>
+            ))}
           </div>
         )}
 
-      {/* Add/Edit modal */}
-      <Modal open={showModal} onClose={() => setShowModal(false)} title={editItem ? 'Editează plan' : 'Antrenament nou'}>
+        {assignedByName && (
+          <p className="text-xs text-brand-blue pt-1 border-t border-dark-600">👤 Alocat de: <span className="font-medium">{assignedByName}</span></p>
+        )}
+        {isAdmin && isStudentCard && studentFeedback[s.id]?.length > 0 && (
+          <div className="pt-1 border-t border-dark-600 space-y-1">
+            <p className="text-xs font-semibold text-brand-orange">💬 Feedback elev</p>
+            {studentFeedback[s.id].map((fb, i) => (
+              <div key={i} className="bg-dark-700 rounded-lg px-2.5 py-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-white">{
+                    { great:'🔥 Excelent', good:'💪 Bine', ok:'😐 Ok', hard:'😰 Greu', bad:'😞 Rău' }[fb.feeling] || fb.feeling
+                  }</span>
+                  <span className="text-xs text-slate-500">{new Date(fb.date + 'T12:00:00').toLocaleDateString('ro-RO', { day: 'numeric', month: 'short' })}</span>
+                </div>
+                {fb.notes && <p className="text-xs text-slate-400 mt-0.5 italic">"{fb.notes}"</p>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Header + tabs for admin */}
+      <div className="flex items-center justify-between">
+        {isAdmin ? (
+          <div className="flex gap-1 bg-dark-700 rounded-xl p-1">
+            <button onClick={() => setActiveSection('mine')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${activeSection === 'mine' ? 'bg-dark-500 text-white' : 'text-slate-500'}`}>
+              📋 Planul meu ({mySchedules.length})
+            </button>
+            <button onClick={() => setActiveSection('students')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${activeSection === 'students' ? 'bg-dark-500 text-white' : 'text-slate-500'}`}>
+              🎓 Elevi ({studentSchedules.length})
+            </button>
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500">Planul apare în Dashboard în ziua potrivită.</p>
+        )}
+        <button onClick={openAdd} className="btn-primary px-4 py-2 text-sm">+ Adaugă</button>
+      </div>
+
+      {loading ? <p className="text-center text-slate-500 text-sm py-4">Se încarcă...</p> : (
+
+        /* ── SECTION: MY PLANS ── */
+        activeSection === 'mine' || !isAdmin ? (
+          <div>
+            {schedules.length === 0 ? (
+              <div className="card text-center py-8">
+                <p className="text-4xl mb-2">📋</p>
+                <p className="text-slate-400 text-sm mb-3">Niciun antrenament planificat.</p>
+                <button onClick={openAdd} className="btn-primary px-6 py-2">+ Plan nou</button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {schedules.map(s => renderScheduleCard(s, false))}
+              </div>
+            )}
+          </div>
+        ) : (
+
+          /* ── SECTION: STUDENTS ── */
+          <div>
+            {studentSchedules.length === 0 ? (
+              <div className="card text-center py-8">
+                <p className="text-4xl mb-2">🎓</p>
+                <p className="text-slate-400 text-sm mb-3">Nu ai alocat antrenamente elevilor încă.</p>
+                <button onClick={openAdd} className="btn-primary px-6 py-2">+ Adaugă pentru elev</button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {/* Group by student */}
+                {Object.entries(
+                  studentSchedules.reduce((acc, s) => {
+                    const uid = s.user_id
+                    if (!acc[uid]) acc[uid] = []
+                    acc[uid].push(s)
+                    return acc
+                  }, {})
+                ).map(([uid, plans]) => {
+                  const profile = studentProfiles[uid]
+                  const name = profile?.full_name || profile?.email || uid.slice(0, 8)
+                  return (
+                    <div key={uid}>
+                      <div className="flex items-center gap-2 px-1 mb-2 mt-3 first:mt-0">
+                        <div className="w-6 h-6 rounded-full bg-brand-blue/20 flex items-center justify-center text-xs">🎓</div>
+                        <p className="text-sm font-semibold text-white">{name}</p>
+                        <span className="text-xs text-slate-500">{plans.length} antrenament{plans.length !== 1 ? 'e' : ''}</span>
+                      </div>
+                      <div className="space-y-2">
+                        {plans.map(s => renderScheduleCard(s, true))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )
+      )}
+
+      {/* ── ADD / EDIT MODAL ── */}
+      <Modal open={showModal} onClose={() => setShowModal(false)} title={editItem ? 'Editează plan' : '+ Antrenament nou'}>
         <div className="space-y-4">
+
+          {/* 1. Recurență + Data — PRIMA */}
           <div>
-            <label className="text-xs text-slate-400 block mb-1">Nume</label>
-            <input className="input" autoFocus placeholder="ex: Piept + Triceps, Alergare interval..." value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
-          </div>
-          <div>
-            <label className="text-xs text-slate-400 block mb-2">Tip</label>
-            <div className="grid grid-cols-2 gap-2">
-              {SPORT_TYPES.map(t => (
-                <button key={t.key} onClick={() => setForm(p => ({ ...p, type: t.key }))}
-                  className={`py-2.5 rounded-xl text-sm font-medium transition-all ${form.type === t.key ? 'bg-brand-purple/20 text-brand-purple border border-brand-purple/40' : 'bg-dark-700 text-slate-400'}`}>
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label className="text-xs text-slate-400 block mb-2">Recurență</label>
-            <div className="flex gap-2">
-              {[{ k: 'weekly', l: '🔁 Săptămânal' }, { k: 'once', l: '📅 O singură dată' }].map(r => (
+            <label className="text-xs text-slate-400 block mb-2">Când?</label>
+            <div className="flex gap-2 mb-2">
+              {[{ k: 'once', l: '📅 O singură dată' }, { k: 'weekly', l: '🔁 Săptămânal' }].map(r => (
                 <button key={r.k} onClick={() => setForm(p => ({ ...p, recurrence: r.k }))}
-                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${form.recurrence === r.k ? 'bg-brand-blue/20 text-brand-blue border border-brand-blue/40' : 'bg-dark-700 text-slate-400'}`}>
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${form.recurrence === r.k ? 'bg-brand-blue/20 text-brand-blue border border-brand-blue/40' : 'bg-dark-700 text-slate-400 border border-transparent'}`}>
                   {r.l}
                 </button>
               ))}
             </div>
-          </div>
-          {form.recurrence === 'weekly' ? (
-            <div>
-              <label className="text-xs text-slate-400 block mb-2">Zilele săptămânii</label>
+            {form.recurrence === 'weekly' ? (
               <div className="flex gap-1.5">
                 {WEEKDAY_LABELS.map((d, i) => (
                   <button key={i} onClick={() => toggleWeekday(i)}
@@ -1210,15 +1600,174 @@ function PlanTab({ session }) {
                   </button>
                 ))}
               </div>
+            ) : (
+              <input className="input" type="date" value={form.scheduled_date}
+                onChange={e => setForm(p => ({ ...p, scheduled_date: e.target.value }))} />
+            )}
+          </div>
+
+          {/* 2. Oră */}
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">Oră (opțional)</label>
+            <input className="input" type="time" step="60" value={form.time}
+              onChange={e => setForm(p => ({ ...p, time: e.target.value }))} />
+          </div>
+
+          {/* 3. Tip */}
+          <div>
+            <label className="text-xs text-slate-400 block mb-2">Tip</label>
+            <div className="grid grid-cols-4 gap-1.5">
+              {SPORT_TYPES.map(t => (
+                <button key={t.key} onClick={() => setForm(p => ({ ...p, type: t.key }))}
+                  className={`py-2 rounded-xl text-xs font-medium transition-all text-center leading-tight ${form.type === t.key ? 'bg-brand-orange/20 text-brand-orange border border-brand-orange/40' : 'bg-dark-700 text-slate-400 border border-transparent'}`}>
+                  {t.label.split(' ')[0]}<br/><span className="text-[10px]">{t.label.split(' ').slice(1).join(' ')}</span>
+                </button>
+              ))}
             </div>
-          ) : (
+          </div>
+
+          {/* 4. Importanță + Dificultate */}
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-slate-400 block mb-1">Data</label>
-              <input className="input" type="date" value={form.scheduled_date} onChange={e => setForm(p => ({ ...p, scheduled_date: e.target.value }))} />
+              <label className="text-xs text-slate-400 block mb-1.5">Importanță</label>
+              <div className="space-y-1.5">
+                {IMPORTANCE.map(i => (
+                  <button key={i.key} onClick={() => setForm(p => ({ ...p, importance: i.key }))}
+                    className={`w-full py-2 rounded-xl text-xs font-medium border transition-all ${form.importance === i.key ? i.cls : 'bg-dark-700 text-slate-400 border-transparent'}`}>
+                    {i.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-slate-400 block mb-1.5">Dificultate</label>
+              <div className="space-y-1.5">
+                {DIFFICULTY.map(d => (
+                  <button key={d.key} onClick={() => setForm(p => ({ ...p, difficulty: d.key }))}
+                    className={`w-full py-2 rounded-xl text-xs font-medium border transition-all ${form.difficulty === d.key ? d.cls : 'bg-dark-700 text-slate-400 border-transparent'}`}>
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 5. Nume */}
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">Nume antrenament</label>
+            <input className="input" autoFocus placeholder="ex: Piept + Triceps, Run 10km..." value={form.name}
+              onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
+          </div>
+
+          {/* 6. Running / Cycling specific */}
+          {(form.type === 'running' || form.type === 'cycling') && (
+            <div className="space-y-3 bg-dark-700 rounded-xl p-3">
+              <p className="text-xs font-semibold text-slate-300">{form.type === 'running' ? '🏃 Detalii alergare' : '🚴 Detalii bicicletă'}</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Distanță (km)</label>
+                  <input className="input" type="number" step="0.1" placeholder="10.0" value={form.distance_km}
+                    onChange={e => setForm(p => ({ ...p, distance_km: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Pace (min/km)</label>
+                  <input className="input" placeholder="5:30" value={form.pace}
+                    onChange={e => setForm(p => ({ ...p, pace: e.target.value }))} />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400 block mb-1.5">Tip {form.type === 'running' ? 'alergare' : 'ieșire'}</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {(form.type === 'running' ? RUN_TYPES : BIKE_TYPES_PLAN).map(t => (
+                    <button key={t} onClick={() => setForm(p => ({ ...p, activity_subtype: t }))}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${form.activity_subtype === t ? 'bg-brand-blue/20 text-brand-blue border border-brand-blue/40' : 'bg-dark-600 text-slate-400'}`}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
-          <button onClick={save} disabled={!form.name || (form.recurrence === 'weekly' && !form.weekdays.length)} className="btn-primary w-full py-3 disabled:opacity-50">
-            {editItem ? 'Salvează' : 'Creează plan'}
+
+          {/* 7. Strength exercises */}
+          {form.type === 'strength' && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-slate-400">Exerciții</label>
+                <button onClick={addExercise} className="text-xs bg-brand-green/10 text-brand-green border border-brand-green/30 px-2.5 py-1 rounded-lg hover:bg-brand-green/20">+ Adaugă</button>
+              </div>
+              {form.exercises.map((ex, i) => (
+                <div key={i} className="flex gap-2 items-center bg-dark-700 rounded-xl p-2">
+                  <span className="text-xs text-slate-500 w-4 shrink-0">{i + 1}.</span>
+                  <input className="input flex-1 py-1.5 text-xs" placeholder="ex: Leg Raises" value={ex.name}
+                    onChange={e => setEx(i, 'name', e.target.value)} />
+                  <input className="input w-14 py-1.5 text-xs text-center" type="number" placeholder="Serii" value={ex.sets}
+                    onChange={e => setEx(i, 'sets', e.target.value)} />
+                  <span className="text-slate-600 text-xs">×</span>
+                  <input className="input w-14 py-1.5 text-xs text-center" type="number" placeholder="Rep" value={ex.reps}
+                    onChange={e => setEx(i, 'reps', e.target.value)} />
+                  {form.exercises.length > 1 && (
+                    <button onClick={() => removeExercise(i)} className="text-slate-600 hover:text-red-400 text-base px-1">×</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 8. Admin: alocare elevi — ascuns la edit dacă e deja alocat */}
+          {isAdmin && students.length > 0 && (
+            <div className="border-t border-dark-600 pt-3">
+              {editItem && form._existing_user_id && form._existing_user_id !== session.user.id ? (
+                // Edit pe antrenament deja alocat — arată doar cui aparține
+                <div className="flex items-center gap-2 bg-brand-blue/10 border border-brand-blue/20 rounded-xl px-3 py-2.5">
+                  <span className="text-brand-blue">🎓</span>
+                  <div>
+                    <p className="text-xs text-brand-blue font-medium">Antrenament alocat</p>
+                    <p className="text-xs text-slate-400">
+                      {students.find(s => s.user_id === form._existing_user_id)?.full_name ||
+                       students.find(s => s.user_id === form._existing_user_id)?.email ||
+                       'Elev'}
+                    </p>
+                  </div>
+                </div>
+              ) : !editItem ? (
+                // Adăugare nouă — selector multi-elev
+                <div>
+                  <label className="text-xs text-slate-400 block mb-2">Alocă la (opțional)</label>
+                  <div className="space-y-1.5">
+                    <button onClick={() => setForm(p => ({ ...p, student_id: '', student_ids: [] }))}
+                      className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition-all border ${!form.student_id && !form.student_ids?.length ? 'border-brand-green/50 bg-brand-green/10 text-brand-green' : 'border-dark-600 bg-dark-700 text-slate-400'}`}>
+                      <span>👤</span> Plan propriu
+                    </button>
+                    {students.map(s => {
+                      const ids = form.student_ids || []
+                      const selected = ids.includes(s.user_id)
+                      return (
+                        <button key={s.user_id}
+                          onClick={() => setForm(p => {
+                            const cur = p.student_ids || []
+                            const next = cur.includes(s.user_id) ? cur.filter(id => id !== s.user_id) : [...cur, s.user_id]
+                            return { ...p, student_ids: next, student_id: next[0] || '' }
+                          })}
+                          className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition-all border ${selected ? 'border-brand-blue/50 bg-brand-blue/10 text-brand-blue' : 'border-dark-600 bg-dark-700 text-slate-400'}`}>
+                          <span>{selected ? '✓' : '🎓'}</span>
+                          <span className="flex-1 text-left truncate">{s.full_name || s.email}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {(form.student_ids?.length > 0) && (
+                    <p className="text-xs text-brand-blue mt-2">✓ {form.student_ids.length} elev{form.student_ids.length > 1 ? 'i selectați' : ' selectat'}</p>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          <button onClick={save}
+            disabled={!form.name || (form.recurrence === 'weekly' && !form.weekdays.length)}
+            className="btn-primary w-full py-3 disabled:opacity-50">
+            {editItem ? 'Salvează modificările' : (form.student_ids?.length > 1 ? `Creează pentru ${form.student_ids.length} elevi` : 'Creează antrenament')}
           </button>
         </div>
       </Modal>
@@ -1226,9 +1775,7 @@ function PlanTab({ session }) {
       {/* Exceptions modal */}
       <Modal open={showExceptModal} onClose={() => setShowExceptModal(false)} title={`🚫 Excepții — ${exceptSchedule?.name || ''}`}>
         <div className="space-y-4">
-          <p className="text-xs text-slate-400">Adaugă zilele în care nu poți face acest antrenament (sărit automat în acea zi).</p>
-
-          {/* Existing exceptions */}
+          <p className="text-xs text-slate-400">Adaugă zilele în care nu poți face acest antrenament.</p>
           {(exceptions[exceptSchedule?.id] || []).length > 0 && (
             <div className="space-y-2">
               {(exceptions[exceptSchedule?.id] || []).map(e => (
@@ -1242,18 +1789,10 @@ function PlanTab({ session }) {
               ))}
             </div>
           )}
-
-          {/* Add new exception */}
           <div className="border-t border-dark-600 pt-3 space-y-3">
-            <p className="text-xs font-semibold text-slate-300">+ Adaugă excepție</p>
-            <div>
-              <label className="text-xs text-slate-400 block mb-1">Data</label>
-              <input className="input" type="date" value={newExceptDate} onChange={e => setNewExceptDate(e.target.value)} />
-            </div>
-            <div>
-              <label className="text-xs text-slate-400 block mb-1">Motiv (opțional)</label>
-              <input className="input" placeholder="ex: Concediu, accidentare..." value={newExceptReason} onChange={e => setNewExceptReason(e.target.value)} />
-            </div>
+            <p className="text-xs font-semibold text-slate-300">+ Excepție nouă</p>
+            <input className="input" type="date" value={newExceptDate} onChange={e => setNewExceptDate(e.target.value)} />
+            <input className="input" placeholder="Motiv (opțional)" value={newExceptReason} onChange={e => setNewExceptReason(e.target.value)} />
             <button onClick={addException} className="btn-primary w-full py-3">Adaugă excepție</button>
           </div>
         </div>
@@ -1263,22 +1802,22 @@ function PlanTab({ session }) {
 }
 
 
-export default function Sport({ session }) {
+export default function Sport({ session, isAdmin }) {
   const location = useLocation ? useLocation() : { search: '' }
-  const initialTab = new URLSearchParams(location?.search || '').get('tab') || 'calendar'
+  const initialTab = new URLSearchParams(location?.search || '').get('tab') || 'plan'
   const [tab, setTab] = useState(initialTab)
   const tabs = [
-    { key: 'calendar', label: '📅 Calendar' },
-    { key: 'plan', label: '📋 Plan' },
-    { key: 'alergare', label: '🏃 Alergare' },
-    { key: 'forta', label: '🏋️ Forță' },
-    { key: 'bicicleta', label: '🚴 Bicicletă' },
+    { key: 'plan',       label: '📋 Plan' },
+    { key: 'calendar',   label: '📅 Calendar' },
+    { key: 'alergare',   label: '🏃 Alergare' },
+    { key: 'forta',      label: '🏋️ Forță' },
+    { key: 'bicicleta',  label: '🚴 Bicicletă' },
     { key: 'statistici', label: '📊 Statistici' },
   ]
 
   return (
     <div className="page fade-in">
-      <h1 className="text-2xl font-bold text-white mb-4">📅 Calendar</h1>
+      <h1 className="text-2xl font-bold text-white mb-4">📋 Plan</h1>
       <div className="flex gap-1 bg-dark-800 border border-dark-600 rounded-xl p-1 mb-4 overflow-x-auto">
         {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
@@ -1287,10 +1826,10 @@ export default function Sport({ session }) {
           </button>
         ))}
       </div>
-      {tab === 'calendar' && <CalendarTab session={session} />}
-      {tab === 'plan' && <PlanTab session={session} />}
+      {tab === 'calendar' && <CalendarTab session={session} isAdmin={isAdmin} />}
+      {tab === 'plan' && <PlanTab session={session} isAdmin={isAdmin} />}
       {tab === 'alergare' && <AlergareTab session={session} />}
-      {tab === 'forta' && <FortaTab session={session} />}
+      {tab === 'forta' && <FortaTab session={session} isAdmin={isAdmin} />}
       {tab === 'bicicleta' && <BicicletaTab session={session} />}
       {tab === 'statistici' && <StatisticiTab session={session} />}
     </div>

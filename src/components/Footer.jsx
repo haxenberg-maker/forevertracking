@@ -1,35 +1,39 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 
-const tabs = [
-  { path: '/', label: 'Acasă', icon: '🏠' },
+const baseTabs = [
+  { path: '/',         label: 'Acasă',   icon: '🏠' },
   { path: '/nutritie', label: 'Nutriție', icon: '🥗' },
-  { path: '/camara', label: 'Cămară', icon: '🧺' },
-  { path: '/sport', label: 'Calendar', icon: '📅' },
-  { path: '/profil', label: 'Profil', icon: '👤' },
+  { path: '/camara',   label: 'Cămară',  icon: '🧺' },
+  { path: '/sport',    label: 'Plan',     icon: '📋' },
+  { path: '/profil',   label: 'Profil',  icon: '👤' },
 ]
 
-export default function Footer() {
+const adminTab = { path: '/utilizatori', label: 'Elevi', icon: '👥' }
+
+export default function Footer({ isAdmin }) {
   const location = useLocation()
   const navigate = useNavigate()
 
+  const tabs = isAdmin ? [...baseTabs, adminTab] : baseTabs
+
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-40 footer-safe">
-      <div className="bg-dark-800/95 backdrop-blur-xl border-t border-dark-600 px-2 pt-2 pb-4">
-        <div className="flex items-center justify-around max-w-md mx-auto">
+      <div className="border-t border-dark-600 px-1 pt-1.5 pb-3" style={{ backgroundColor: 'var(--bg-800)' }}>
+        <div className={`flex items-center justify-around ${isAdmin ? 'max-w-lg' : 'max-w-md'} mx-auto`}>
           {tabs.map(tab => {
             const active = location.pathname === tab.path
             return (
               <button
                 key={tab.path}
                 onClick={() => navigate(tab.path)}
-                className={`flex flex-col items-center gap-1 px-4 py-1.5 rounded-xl transition-all duration-200 ${
-                  active ? 'bg-dark-600' : 'hover:bg-dark-700'
-                }`}
+                className={`flex flex-col items-center gap-0.5 rounded-xl transition-all duration-200 ${
+                  isAdmin ? 'px-2 py-1.5 min-w-0 flex-1' : 'px-3 py-1.5'
+                } ${active ? 'bg-dark-600' : 'hover:bg-dark-700'}`}
               >
-                <span className={`text-xl transition-transform ${active ? 'scale-110' : 'scale-100'}`}>
+                <span className={`transition-transform leading-none ${active ? 'scale-110' : 'scale-100'} ${isAdmin ? 'text-lg' : 'text-xl'}`}>
                   {tab.icon}
                 </span>
-                <span className={`text-xs font-medium transition-colors ${
+                <span className={`font-medium transition-colors truncate w-full text-center ${isAdmin ? 'text-[10px]' : 'text-xs'} ${
                   active ? 'text-brand-green' : 'text-slate-500'
                 }`}>
                   {tab.label}
