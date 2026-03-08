@@ -809,6 +809,8 @@ export default function Dashboard({ session, isAdmin }) {
   const [quickSelected, setQuickSelected] = useState(null)
   const [quickQty, setQuickQty] = useState('100')
   const [quickPicking, setQuickPicking] = useState(false)
+  const [quickNewForm, setQuickNewForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '' })
+  const [showQuickNewForm, setShowQuickNewForm] = useState(false)
 
   const now = new Date()
   const dateStr = `${dayNames[now.getDay()]}, ${now.getDate()} ${monthNames[now.getMonth()]}`
@@ -822,7 +824,32 @@ export default function Dashboard({ session, isAdmin }) {
       setQuickFoods(data || [])
     }
     setQuickSelected(null); setQuickSearch(''); setQuickQty('100'); setQuickPicking(false)
+    setShowQuickNewForm(false); setQuickNewForm({ name: '', calories: '', protein: '', carbs: '', fat: '' })
     setShowQuickAdd(true)
+  }
+
+  async function saveQuickNewFood() {
+    if (!quickNewForm.name || !quickNewForm.calories) return
+    const existing = quickFoods.find(f => f.name.toLowerCase() === quickNewForm.name.toLowerCase())
+    if (existing) {
+      if (confirm(`"${existing.name}" există deja. Folosești alimentul existent?`)) {
+        setQuickSelected(existing); setShowQuickNewForm(false); setQuickPicking(false); return
+      }
+    }
+    const { data: food } = await supabase.from('foods').insert({
+      user_id: session.user.id, user_email: session.user.email,
+      name: quickNewForm.name,
+      calories: parseFloat(quickNewForm.calories) || 0,
+      protein: parseFloat(quickNewForm.protein) || 0,
+      carbs: parseFloat(quickNewForm.carbs) || 0,
+      fat: parseFloat(quickNewForm.fat) || 0,
+    }).select().single()
+    if (food) {
+      setQuickFoods(prev => [...prev, food].sort((a,b) => a.name.localeCompare(b.name)))
+      setQuickSelected(food)
+      setShowQuickNewForm(false)
+      setQuickPicking(false)
+    }
   }
 
   async function saveQuickAdd() {
@@ -984,20 +1011,62 @@ export default function Dashboard({ session, isAdmin }) {
         ) : (
           <div className="space-y-3">
             <input className="input" autoFocus placeholder="Caută aliment..."
-              value={quickSearch} onChange={e => setQuickSearch(e.target.value)} />
-            <div className="space-y-1.5 max-h-72 overflow-y-auto">
-              {quickFoods.filter(f => f.name.toLowerCase().includes(quickSearch.toLowerCase())).map(f => (
-                <button key={f.id} onClick={() => { setQuickSelected(f); setQuickPicking(false); setQuickSearch('') }}
-                  className="w-full flex justify-between items-center bg-dark-700 rounded-xl px-3 py-2.5 hover:bg-dark-600 text-left">
-                  <span className="text-sm text-white">{f.name}</span>
-                  <span className="text-xs text-slate-400">{f.calories} kcal/100g</span>
-                </button>
-              ))}
-              {quickFoods.filter(f => f.name.toLowerCase().includes(quickSearch.toLowerCase())).length === 0 && (
-                <p className="text-slate-500 text-sm text-center py-4">Niciun aliment găsit.</p>
-              )}
+              value={quickSearch} onChange={e => { setQuickSearch(e.target.value); setShowQuickNewForm(false) }} />
+            <div className="space-y-1.5 max-h-52 overflow-y-auto">
+              {(() => {
+                const results = quickFoods.filter(f => f.name.toLowerCase().includes(quickSearch.toLowerCase()))
+                if (results.length === 0) return (
+                  <div className="text-center py-3 space-y-2">
+                    <p className="text-slate-500 text-sm">Niciun aliment găsit.</p>
+                    {!showQuickNewForm && (
+                      <button onClick={() => { setShowQuickNewForm(true); setQuickNewForm(p => ({ ...p, name: quickSearch })) }}
+                        className="btn-primary w-full py-2.5 text-sm">
+                        + Adaugă „{quickSearch}" ca aliment nou
+                      </button>
+                    )}
+                  </div>
+                )
+                return results.map(f => (
+                  <button key={f.id} onClick={() => { setQuickSelected(f); setQuickPicking(false); setQuickSearch(''); setShowQuickNewForm(false) }}
+                    className="w-full flex justify-between items-center bg-dark-700 rounded-xl px-3 py-2.5 hover:bg-dark-600 text-left">
+                    <span className="text-sm text-white">{f.name}</span>
+                    <span className="text-xs text-slate-400">{f.calories} kcal/100g</span>
+                  </button>
+                ))
+              })()}
             </div>
-            <button onClick={() => setQuickPicking(false)} className="btn-ghost w-full">← Înapoi</button>
+
+            {/* Add new food anyway (even if results exist) */}
+            {!showQuickNewForm && quickSearch.length > 1 && quickFoods.filter(f => f.name.toLowerCase().includes(quickSearch.toLowerCase())).length > 0 && (
+              <button onClick={() => { setShowQuickNewForm(true); setQuickNewForm(p => ({ ...p, name: quickSearch })) }}
+                className="w-full py-2 rounded-xl border border-dashed border-dark-500 text-slate-500 text-xs hover:border-brand-green/40 hover:text-brand-green transition-all">
+                + Adaugă „{quickSearch}" ca aliment nou
+              </button>
+            )}
+
+            {showQuickNewForm && (
+              <div className="bg-dark-700 border border-brand-green/30 rounded-xl p-3 space-y-2">
+                <p className="text-xs font-semibold text-brand-green">✏️ Aliment nou</p>
+                <input className="input" placeholder="Nume *" value={quickNewForm.name}
+                  onChange={e => setQuickNewForm(p => ({ ...p, name: e.target.value }))} />
+                <div className="grid grid-cols-2 gap-2">
+                  {[['calories','kcal /100g *'],['protein','Proteine g'],['carbs','Carbo g'],['fat','Grăsimi g']].map(([k,lbl]) => (
+                    <div key={k}>
+                      <label className="text-[10px] text-slate-500 block mb-0.5">{lbl}</label>
+                      <input className="input" type="number" placeholder="0" value={quickNewForm[k]}
+                        onChange={e => setQuickNewForm(p => ({ ...p, [k]: e.target.value }))} />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => setShowQuickNewForm(false)} className="btn-ghost flex-1 py-2 text-sm">✕</button>
+                  <button onClick={saveQuickNewFood} disabled={!quickNewForm.name || !quickNewForm.calories}
+                    className="btn-primary flex-1 py-2 text-sm disabled:opacity-40">Salvează & selectează</button>
+                </div>
+              </div>
+            )}
+
+            <button onClick={() => { setQuickPicking(false); setShowQuickNewForm(false) }} className="btn-ghost w-full">← Înapoi</button>
           </div>
         )}
       </Modal>

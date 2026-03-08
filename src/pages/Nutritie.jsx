@@ -488,7 +488,7 @@ function AziTab({ session }) {
                 </div>
               </div>
             )}
-            <div className="space-y-1.5 max-h-56 overflow-y-auto">
+            <div className="space-y-1.5 max-h-52 overflow-y-auto">
               {filteredFoods.length === 0
                 ? (
                   <div className="text-center py-3 space-y-2">
@@ -509,6 +509,14 @@ function AziTab({ session }) {
                   </button>
                 ))}
             </div>
+
+            {/* Always show option to add new food, even when results exist */}
+            {!showNewFoodForm && search.length > 1 && filteredFoods.length > 0 && (
+              <button onClick={() => { setShowNewFoodForm(true); setNewFoodForm(p => ({ ...p, name: search })) }}
+                className="w-full py-2 rounded-xl border border-dashed border-dark-500 text-slate-500 text-xs hover:border-brand-green/40 hover:text-brand-green transition-all">
+                + Adaugă „{search}" ca aliment nou
+              </button>
+            )}
 
             {showNewFoodForm && (
               <div className="bg-dark-700 border border-brand-green/30 rounded-xl p-3 space-y-2">
@@ -1049,8 +1057,8 @@ export default function Nutritie({ session, isAdmin }) {
   const [tab, setTab] = useState('azi')
   const tabs = [
     { key: 'azi',      label: '📅 Azi' },
-    { key: 'mese',     label: '🍽️ Mese' },
     { key: 'alimente', label: '🥦 Alimente' },
+    { key: 'mese',     label: '🍽️ Mese' },
   ]
   return (
     <div className="page fade-in">
