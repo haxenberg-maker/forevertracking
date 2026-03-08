@@ -512,8 +512,6 @@ function AziTab({ session }) {
             <button onClick={() => { setPickingFood(false); setSearch(''); setShowNewFoodForm(false) }} className="btn-ghost w-full">← Înapoi</button>
           </div>
         )}
-          </div>
-        )}
         {pickingTemplate && (
           <div className="space-y-3">
             <input className="input" autoFocus value={search} onChange={e => setSearch(e.target.value)} placeholder="Caută masă..." />
