@@ -156,6 +156,19 @@ function AziTab({ session }) {
 
   async function saveNewFoodInline() {
     if (!newFoodForm.name || !newFoodForm.calories) return
+    // Check if food with same name already exists
+    const existing = allFoods.find(f => f.name.toLowerCase() === newFoodForm.name.toLowerCase())
+    if (existing) {
+      // Offer to use existing food instead
+      if (confirm(`"${existing.name}" există deja (${existing.calories} kcal/100g). Folosești alimentul existent?`)) {
+        setSelectedFood(existing)
+        setShowNewFoodForm(false)
+        setPickingFood(false)
+        setSearch('')
+        return
+      }
+      // User chose to add anyway (different values)
+    }
     const { data: food } = await supabase.from('foods').insert({
       user_id: session.user.id,
       user_email: session.user.email,
@@ -576,7 +589,8 @@ function MeseTab({ session, isAdmin }) {
       id, name, user_id, is_public,
       meal_template_items(id, quantity_g, foods(id, name, calories, protein, carbs, fat))
     `).order('name')
-    setTemplates(t || [])
+    // Show only own templates + public ones (hide other users' private templates)
+    setTemplates((t || []).filter(r => r.user_id === session.user.id || r.is_public === true))
     const { data: f } = await supabase.from('foods').select('*').order('name')
     setAllFoods(f || [])
     setLoading(false)
@@ -831,6 +845,14 @@ function AlimenteTab({ session, isAdmin }) {
 
   async function saveFood() {
     if (!form.name || !form.calories) return
+    // Check duplicate by name (case-insensitive), skip own record when editing
+    const duplicate = foods.find(f =>
+      f.name.toLowerCase() === form.name.toLowerCase() &&
+      (!editFood || f.id !== editFood.id)
+    )
+    if (duplicate) {
+      if (!confirm(`Există deja un aliment numit "${duplicate.name}". Adaugi oricum?`)) return
+    }
     const data = {
       user_id: session.user.id,
       user_email: session.user.email,
