@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import Modal from '../components/Modal'
+import { getCached, setCached, invalidateCache } from '../lib/cache'
 
 function getToday() {
   const d = new Date()
@@ -63,18 +64,26 @@ function AziTab({ session }) {
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
-    loadMeals()
-    const { data: foods } = await supabase.from('foods').select('*').order('name')
-    setAllFoods(foods || [])
-    const { data: pantry } = await supabase.from('pantry_items').select('*').eq('user_id', session.user.id).eq('list_type', 'stock')
+    // Use cached foods if available (saves ~200ms on revisit)
+    const cachedFoods = getCached('foods')
+    const [
+      foodsRes,
+      { data: pantry },
+      { data: templates },
+      { data: sups },
+    ] = await Promise.all([
+      cachedFoods ? Promise.resolve({ data: cachedFoods }) : supabase.from('foods').select('*').order('name'),
+      supabase.from('pantry_items').select('*').eq('user_id', session.user.id).eq('list_type', 'stock'),
+      supabase.from('meal_templates')
+        .select(`id, name, user_id, is_public, meal_template_items(quantity_g, foods(id, name, calories, protein, carbs, fat))`)
+        .order('name'),
+      supabase.from('daily_supplements').select('*').eq('user_id', session.user.id),
+    ])
+    const foods = foodsRes.data || []
+    if (!cachedFoods) setCached('foods', foods)
+    setAllFoods(foods)
     setPantryItems(pantry || [])
-    const { data: templates } = await supabase.from('meal_templates')
-      .select(`id, name, user_id, is_public, meal_template_items(quantity_g, foods(id, name, calories, protein, carbs, fat))`)
-      .order('name')
-    // Show only own templates + public ones
     setMealTemplates((templates || []).filter(t => t.user_id === session.user.id || t.is_public === true))
-    // Load supplements taken today (with macro info)
-    const { data: sups } = await supabase.from('daily_supplements').select('*').eq('user_id', session.user.id)
     if (sups?.length) {
       const { data: logs } = await supabase.from('supplement_logs').select('*').eq('user_id', session.user.id).eq('date', today).eq('taken', true)
       const takenIds = new Set((logs || []).map(l => l.supplement_id))
@@ -82,6 +91,7 @@ function AziTab({ session }) {
     } else {
       setTakenSupplements([])
     }
+    loadMeals()
   }
 
   async function loadMeals() {
@@ -830,10 +840,15 @@ function AlimenteTab({ session, isAdmin }) {
 
   useEffect(() => { loadFoods() }, [])
 
-  async function loadFoods() {
+  async function loadFoods(bust = false) {
     setLoading(true)
+    if (bust) invalidateCache('foods')
+    const cached = getCached('foods')
+    if (cached) { setFoods(cached); setLoading(false); return }
     const { data } = await supabase.from('foods').select('*').order('name')
-    setFoods(data || [])
+    const foods = data || []
+    setCached('foods', foods)
+    setFoods(foods)
     setLoading(false)
   }
 
@@ -866,11 +881,11 @@ function AlimenteTab({ session, isAdmin }) {
     }
     if (editFood) await supabase.from('foods').update(data).eq('id', editFood.id)
     else await supabase.from('foods').insert(data)
-    setShowModal(false); loadFoods()
+    setShowModal(false); loadFoods(true)
   }
 
   async function deleteFood(id) {
-    if (confirm('Ștergi alimentul?')) { await supabase.from('foods').delete().eq('id', id); loadFoods() }
+    if (confirm('Ștergi alimentul?')) { await supabase.from('foods').delete().eq('id', id); loadFoods(true) }
   }
 
   async function handleCSV(e) {
@@ -883,7 +898,7 @@ function AlimenteTab({ session, isAdmin }) {
       }).filter(Boolean)
     )
     if (rows?.length) await supabase.from('foods').insert(rows)
-    e.target.value = ''; loadFoods()
+    e.target.value = ''; loadFoods(true)
     alert(`✅ ${rows?.length || 0} alimente importate!`)
   }
 
