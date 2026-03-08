@@ -2,6 +2,21 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import Modal from '../components/Modal'
 
+function MacroSlider({ label, emoji, colorClass, colorHex, value, onChange }) {
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-1">
+        <span className="text-xs text-slate-300">{emoji} {label}</span>
+        <span className={`text-sm font-bold ${colorClass}`}>{value}%</span>
+      </div>
+      <input type="range" min={10} max={70} step={1} value={value}
+        onChange={e => onChange(parseInt(e.target.value))}
+        className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+        style={{ accentColor: colorHex }} />
+    </div>
+  )
+}
+
 const ACCOUNT_TYPES = [
   { key: 'user',  label: '👤 Utilizator', color: 'text-slate-400' },
   { key: 'elev',  label: '🎓 Elev',       color: 'text-brand-blue' },
@@ -54,9 +69,20 @@ export default function Utilizatori({ session }) {
   const [editTargets, setEditTargets]   = useState({ calories: '', protein_g: '', carbs_g: '', fat_g: '', water_ml: '' })
   const [editActivity, setEditActivity] = useState('moderate')
   const [editAccountType, setEditAccountType] = useState('user')
+  const [editGoal, setEditGoal]         = useState('maintain')
+  // Macro sliders
+  const [macroP, setMacroP] = useState(25)
+  const [macroC, setMacroC] = useState(45)
+  const [macroF, setMacroF] = useState(30)
   // History
-  const [history, setHistory]           = useState([]) // last 14 days
+  const [history, setHistory]           = useState([])
   const [histLoading, setHistLoading]   = useState(false)
+
+  const macroTotal = macroP + macroC + macroF
+  const macroOk = macroTotal === 100
+  function setProtein(v) { setMacroP(v); setMacroC(Math.max(10, Math.min(70, 100 - v - macroF))) }
+  function setFat(v)     { setMacroF(v); setMacroC(Math.max(10, Math.min(70, 100 - macroP - v))) }
+  function setCarbs(v)   { setMacroC(v); setMacroF(Math.max(10, Math.min(70, 100 - macroP - v))) }
 
   useEffect(() => { load() }, [])
 
@@ -71,15 +97,27 @@ export default function Utilizatori({ session }) {
     setSelectedUser(u)
     setEditAccountType(u.account_type || 'user')
     setEditActivity(u.activity_level || 'moderate')
+    setEditGoal(u.goal || 'maintain')
     setActiveTab('profile')
+    setHistory([]) // reset history when switching user
     const { data: targets } = await supabase.from('user_targets').select('*').eq('user_id', u.user_id).single()
+    const cal = targets?.calories ?? ''
+    const pg  = targets?.protein_g ?? ''
+    const fg  = targets?.fat_g ?? ''
     setEditTargets({
-      calories: String(targets?.calories || ''),
-      protein_g: String(targets?.protein_g || ''),
-      carbs_g: String(targets?.carbs_g || ''),
-      fat_g: String(targets?.fat_g || ''),
-      water_ml: String(targets?.water_ml || '2000'),
+      calories: String(cal),
+      protein_g: String(pg),
+      carbs_g: String(targets?.carbs_g ?? ''),
+      fat_g: String(fg),
+      water_ml: String(targets?.water_ml ?? ''),
     })
+    if (pg && fg && cal) {
+      const p = Math.round((pg * 4 / cal) * 100)
+      const f = Math.round((fg * 9 / cal) * 100)
+      setMacroP(Math.max(10, Math.min(70, p)))
+      setMacroF(Math.max(10, Math.min(70, f)))
+      setMacroC(Math.max(10, 100 - p - f))
+    } else { setMacroP(25); setMacroC(45); setMacroF(30) }
     setShowModal(true)
   }
 
@@ -155,15 +193,17 @@ export default function Utilizatori({ session }) {
     await supabase.from('user_profiles').update({
       account_type: editAccountType,
       activity_level: editActivity,
+      goal: editGoal,
     }).eq('user_id', selectedUser.user_id)
 
+    const targetKcal = parseInt(editTargets.calories) || 2000
     await supabase.from('user_targets').upsert({
       user_id: selectedUser.user_id,
-      calories:   parseInt(editTargets.calories)  || 2000,
-      protein_g:  parseInt(editTargets.protein_g) || 150,
-      carbs_g:    parseInt(editTargets.carbs_g)   || 250,
-      fat_g:      parseInt(editTargets.fat_g)     || 65,
-      water_ml:   parseInt(editTargets.water_ml)  || 2000,
+      calories:   targetKcal,
+      protein_g:  Math.round((targetKcal * macroP / 100) / 4),
+      carbs_g:    Math.round((targetKcal * macroC / 100) / 4),
+      fat_g:      Math.round((targetKcal * macroF / 100) / 9),
+      water_ml:   parseInt(editTargets.water_ml) || 0,
     }, { onConflict: 'user_id' })
 
     setSaving(false); setSaved(true)
@@ -308,26 +348,90 @@ export default function Utilizatori({ session }) {
                   </div>
                 )}
 
-                {/* Targets */}
+                {/* Goal */}
                 <div>
-                  <label className="text-xs text-slate-400 block mb-2">Targeturi zilnice</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { k: 'calories',  l: 'Calorii (kcal)' },
-                      { k: 'water_ml',  l: 'Apă (ml)' },
-                      { k: 'protein_g', l: 'Proteine (g)' },
-                      { k: 'carbs_g',   l: 'Carbohidrați (g)' },
-                      { k: 'fat_g',     l: 'Grăsimi (g)' },
-                    ].map(f => (
-                      <div key={f.k}>
-                        <label className="text-xs text-slate-500 block mb-1">{f.l}</label>
-                        <input className="input" type="number"
-                          value={editTargets[f.k]}
-                          onChange={e => setEditTargets(p => ({ ...p, [f.k]: e.target.value }))} />
-                      </div>
+                  <label className="text-xs text-slate-400 block mb-2">Obiectiv</label>
+                  <div className="flex gap-2">
+                    {GOALS.map(g => (
+                      <button key={g.key} onClick={() => setEditGoal(g.key)}
+                        className={`flex-1 py-2 rounded-xl text-xs font-medium transition-all ${editGoal === g.key ? 'bg-brand-purple/20 text-brand-purple border border-brand-purple/40' : 'bg-dark-700 text-slate-400'}`}>
+                        {g.label}
+                      </button>
                     ))}
                   </div>
                 </div>
+
+                {/* Calorie algorithm */}
+                {bmr > 0 && (
+                  <div className="bg-dark-700 rounded-xl p-3 space-y-2">
+                    <p className="text-xs font-semibold text-white">🔥 Algoritm calorii</p>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="bg-dark-600 rounded-lg py-2">
+                        <p className="text-sm font-bold text-white">{Math.round(bmr)}</p>
+                        <p className="text-[10px] text-slate-500">BMR</p>
+                      </div>
+                      <div className="bg-dark-600 rounded-lg py-2">
+                        <p className="text-sm font-bold text-brand-orange">{tdee}</p>
+                        <p className="text-[10px] text-slate-500">TDEE</p>
+                      </div>
+                      <div className="bg-dark-600 rounded-lg py-2">
+                        <p className="text-sm font-bold text-brand-green">{suggestedCal}</p>
+                        <p className="text-[10px] text-slate-500">Recomandat</p>
+                      </div>
+                    </div>
+                    <button onClick={() => setEditTargets(p => ({ ...p, calories: String(suggestedCal) }))}
+                      className="text-xs text-brand-green hover:text-brand-green/80 transition-colors">
+                      ← Aplică valoarea recomandată ({suggestedCal} kcal)
+                    </button>
+                  </div>
+                )}
+
+                {/* Calories + Water */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-slate-400 block mb-1">Calorii (kcal/zi)</label>
+                    <input className="input" type="number" value={editTargets.calories}
+                      onChange={e => setEditTargets(p => ({ ...p, calories: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400 block mb-1">Apă (ml/zi)</label>
+                    <input className="input" type="number" value={editTargets.water_ml}
+                      onChange={e => setEditTargets(p => ({ ...p, water_ml: e.target.value }))} />
+                  </div>
+                </div>
+
+                {/* Macro sliders — identical to Profil */}
+                {parseInt(editTargets.calories) > 0 && (
+                  <div className="bg-dark-700 rounded-xl p-3 space-y-3">
+                    <div className="flex justify-between items-center">
+                      <p className="text-xs font-semibold text-white">Macronutrienți</p>
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${macroOk ? 'bg-brand-green/20 text-brand-green' : 'bg-red-500/20 text-red-400'}`}>{macroTotal}%</span>
+                    </div>
+                    <MacroSlider label="Proteine"      emoji="💪" colorClass="text-brand-blue"   colorHex="#60a5fa" value={macroP} onChange={setProtein} />
+                    <MacroSlider label="Carbohidrați"  emoji="🌾" colorClass="text-brand-orange" colorHex="#fb923c" value={macroC} onChange={setCarbs} />
+                    <MacroSlider label="Grăsimi"       emoji="🥑" colorClass="text-brand-purple" colorHex="#a78bfa" value={macroF} onChange={setFat} />
+                    <div className="flex h-1.5 rounded-full overflow-hidden">
+                      <div className="bg-brand-blue transition-all"   style={{ width: `${macroP}%` }} />
+                      <div className="bg-brand-orange transition-all" style={{ width: `${macroC}%` }} />
+                      <div className="bg-brand-purple transition-all" style={{ width: `${macroF}%` }} />
+                    </div>
+                    {(() => {
+                      const kcal = parseInt(editTargets.calories) || 0
+                      return (
+                        <div className="grid grid-cols-4 gap-1 text-center">
+                          {[
+                            { label: 'kcal', value: kcal, color: 'text-brand-green' },
+                            { label: 'prot.', value: `${Math.round((kcal * macroP / 100) / 4)}g`, color: 'text-brand-blue' },
+                            { label: 'carb.', value: `${Math.round((kcal * macroC / 100) / 4)}g`, color: 'text-brand-orange' },
+                            { label: 'grăs.', value: `${Math.round((kcal * macroF / 100) / 9)}g`, color: 'text-brand-purple' },
+                          ].map(s => (
+                            <div key={s.label}><p className={`text-sm font-bold ${s.color}`}>{s.value}</p><p className="text-xs text-slate-500">{s.label}</p></div>
+                          ))}
+                        </div>
+                      )
+                    })()}
+                  </div>
+                )}
 
                 <button onClick={saveUser} disabled={saving}
                   className={`btn-primary w-full py-3 transition-all ${saved ? 'bg-brand-green/50' : ''}`}>

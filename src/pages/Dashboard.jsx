@@ -289,14 +289,15 @@ function WaterCard({ session, targets }) {
 
 // ─── SUPPLEMENTS ─────────────────────────────────────
 
-function SupplementsCard({ session }) {
+function SupplementsCard({ session, onToggle }) {
   const today = getToday()
   const [supplements, setSupplements] = useState([])
   const [logs, setLogs] = useState({})
   const [showManage, setShowManage] = useState(false)
   const [showAddForm, setShowAddForm] = useState(false)
-  const [form, setForm] = useState({ name: '', amount_g: '', unit: 'g' })
+  const [form, setForm] = useState({ name: '', amount_g: '', unit: 'g', calories: '', protein_g: '', carbs_g: '', fat_g: '' })
   const [editItem, setEditItem] = useState(null)
+  const [showMacros, setShowMacros] = useState(false)
   const UNITS = ['g', 'mg', 'ml', 'capsule', 'tabletă', 'linguriță']
 
   useEffect(() => { loadAll() }, [])
@@ -322,22 +323,41 @@ function SupplementsCard({ session }) {
       const { data } = await supabase.from('supplement_logs').insert({ user_id: session.user.id, supplement_id: sup.id, date: today, taken: true }).select().single()
       setLogs(prev => ({ ...prev, [sup.id]: data }))
     }
+    onToggle?.() // refresh calorie ring in Dashboard
   }
 
   async function saveSupplement() {
     if (!form.name) return
-    const data = { user_id: session.user.id, name: form.name, amount_g: parseFloat(form.amount_g) || 0, unit: form.unit }
+    const data = {
+      user_id: session.user.id,
+      name: form.name,
+      amount_g: parseFloat(form.amount_g) || 0,
+      unit: form.unit,
+      calories:  parseFloat(form.calories)  || 0,
+      protein_g: parseFloat(form.protein_g) || 0,
+      carbs_g:   parseFloat(form.carbs_g)   || 0,
+      fat_g:     parseFloat(form.fat_g)     || 0,
+    }
     if (editItem) await supabase.from('daily_supplements').update(data).eq('id', editItem.id)
     else await supabase.from('daily_supplements').insert(data)
-    setForm({ name: '', amount_g: '', unit: 'g' }); setShowAddForm(false); setEditItem(null); loadAll()
+    setForm({ name: '', amount_g: '', unit: 'g', calories: '', protein_g: '', carbs_g: '', fat_g: '' })
+    setShowAddForm(false); setEditItem(null); setShowMacros(false); loadAll()
   }
 
   async function deleteSupplement(id) {
-    if (confirm('Ștergi suplimentul?')) { await supabase.from('daily_supplements').delete().eq('id', id); loadAll() }
+    if (confirm('Ștergi suplimentul?')) {
+      await supabase.from('daily_supplements').delete().eq('id', id)
+      loadAll()
+      onToggle?.()
+    }
   }
 
-  function openEdit(s) { setForm({ name: s.name, amount_g: String(s.amount_g), unit: s.unit }); setEditItem(s); setShowAddForm(true) }
-  function closeManage() { setShowManage(false); setShowAddForm(false); setEditItem(null); setForm({ name: '', amount_g: '', unit: 'g' }) }
+  function openEdit(s) {
+    setForm({ name: s.name, amount_g: String(s.amount_g), unit: s.unit, calories: String(s.calories || ''), protein_g: String(s.protein_g || ''), carbs_g: String(s.carbs_g || ''), fat_g: String(s.fat_g || '') })
+    setEditItem(s); setShowAddForm(true)
+    setShowMacros(!!(s.calories || s.protein_g || s.carbs_g || s.fat_g))
+  }
+  function closeManage() { setShowManage(false); setShowAddForm(false); setEditItem(null); setForm({ name: '', amount_g: '', unit: 'g', calories: '', protein_g: '', carbs_g: '', fat_g: '' }); setShowMacros(false) }
   const takenCount = supplements.filter(s => logs[s.id]?.taken).length
 
   const modal = (
@@ -378,8 +398,33 @@ function SupplementsCard({ session }) {
               </select>
             </div>
           </div>
+          {/* Optional macros */}
+          <button onClick={() => setShowMacros(p => !p)}
+            className="w-full text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1.5 py-1 transition-colors">
+            <span>{showMacros ? '▾' : '▸'}</span>
+            <span>Macronutrienți opționali (calorii, proteine etc.)</span>
+          </button>
+          {showMacros && (
+            <div className="bg-dark-700 rounded-xl p-3 space-y-2">
+              <p className="text-xs text-slate-500">Valorile per doză (per cantitate de mai sus)</p>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { k: 'calories',  l: '🔥 Calorii (kcal)' },
+                  { k: 'protein_g', l: '💪 Proteine (g)' },
+                  { k: 'carbs_g',   l: '🌾 Carbohidrați (g)' },
+                  { k: 'fat_g',     l: '🥑 Grăsimi (g)' },
+                ].map(f => (
+                  <div key={f.k}>
+                    <label className="text-xs text-slate-400 block mb-1">{f.l}</label>
+                    <input className="input" type="number" step="0.1" placeholder="0"
+                      value={form[f.k]} onChange={e => setForm(p => ({ ...p, [f.k]: e.target.value }))} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex gap-2">
-            <button onClick={() => { setShowAddForm(false); setEditItem(null) }} className="btn-ghost flex-1 py-3">← Înapoi</button>
+            <button onClick={() => { setShowAddForm(false); setEditItem(null); setShowMacros(false) }} className="btn-ghost flex-1 py-3">← Înapoi</button>
             <button onClick={saveSupplement} className="btn-primary flex-1 py-3">{editItem ? 'Salvează' : 'Adaugă'}</button>
           </div>
         </div>
@@ -419,7 +464,7 @@ function SupplementsCard({ session }) {
               </div>
               <div className="flex-1">
                 <p className={`text-sm font-medium ${taken ? 'text-brand-green' : 'text-slate-200'}`}>{s.name}</p>
-                <p className="text-xs text-slate-500">{s.amount_g} {s.unit}</p>
+                <p className="text-xs text-slate-500">{s.amount_g} {s.unit}{s.calories > 0 ? ` · ${s.calories} kcal` : ''}</p>
               </div>
             </button>
           )
@@ -757,6 +802,15 @@ export default function Dashboard({ session, isAdmin }) {
   const [todayNutrition, setTodayNutrition] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
   const [caloriesBurned, setCaloriesBurned] = useState(0)
   const [userName, setUserName] = useState('')
+  const [showQuickAdd, setShowQuickAdd] = useState(false)
+  const [quickMealType, setQuickMealType] = useState('breakfast')
+  const [quickFoods, setQuickFoods] = useState([])
+  const [quickSearch, setQuickSearch] = useState('')
+  const [quickSelected, setQuickSelected] = useState(null)
+  const [quickQty, setQuickQty] = useState('100')
+  const [quickPicking, setQuickPicking] = useState(false)
+  const [quickNewForm, setQuickNewForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '' })
+  const [showQuickNewForm, setShowQuickNewForm] = useState(false)
 
   const now = new Date()
   const dateStr = `${dayNames[now.getDay()]}, ${now.getDate()} ${monthNames[now.getMonth()]}`
@@ -764,28 +818,93 @@ export default function Dashboard({ session, isAdmin }) {
 
   useEffect(() => { loadData() }, [])
 
+  async function openQuickAdd() {
+    if (!quickFoods.length) {
+      const { data } = await supabase.from('foods').select('id, name, calories, protein, carbs, fat, serving_size, serving_unit').order('name')
+      setQuickFoods(data || [])
+    }
+    setQuickSelected(null); setQuickSearch(''); setQuickQty('100'); setQuickPicking(false)
+    setShowQuickNewForm(false); setQuickNewForm({ name: '', calories: '', protein: '', carbs: '', fat: '' })
+    setShowQuickAdd(true)
+  }
+
+  async function saveQuickNewFood() {
+    if (!quickNewForm.name || !quickNewForm.calories) return
+    const existing = quickFoods.find(f => f.name.toLowerCase() === quickNewForm.name.toLowerCase())
+    if (existing) {
+      if (confirm(`"${existing.name}" există deja. Folosești alimentul existent?`)) {
+        setQuickSelected(existing); setShowQuickNewForm(false); setQuickPicking(false); return
+      }
+    }
+    const { data: food } = await supabase.from('foods').insert({
+      user_id: session.user.id, user_email: session.user.email,
+      name: quickNewForm.name,
+      calories: parseFloat(quickNewForm.calories) || 0,
+      protein: parseFloat(quickNewForm.protein) || 0,
+      carbs: parseFloat(quickNewForm.carbs) || 0,
+      fat: parseFloat(quickNewForm.fat) || 0,
+    }).select().single()
+    if (food) {
+      setQuickFoods(prev => [...prev, food].sort((a,b) => a.name.localeCompare(b.name)))
+      setQuickSelected(food)
+      setShowQuickNewForm(false)
+      setQuickPicking(false)
+    }
+  }
+
+  async function saveQuickAdd() {
+    if (!quickSelected) return
+    let mealLog = null
+    const { data: existing } = await supabase.from('meal_logs').select('id').eq('user_id', session.user.id).eq('date', today).eq('meal_type', quickMealType).single()
+    if (existing) { mealLog = existing }
+    else {
+      const { data } = await supabase.from('meal_logs').insert({ user_id: session.user.id, date: today, meal_type: quickMealType }).select().single()
+      mealLog = data
+    }
+    const qg = parseFloat(quickQty) || 100
+    await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: quickSelected.id, quantity_g: qg })
+    setShowQuickAdd(false)
+    loadData()
+  }
+
   async function loadData() {
     const uid = session.user.id
-    const [{ data: t }, { data: pr }] = await Promise.all([
+    // Run ALL independent queries in parallel
+    const [
+      { data: t },
+      { data: pr },
+      { data: meals },
+      { data: allSups },
+      { data: supLogs },
+      { data: wo },
+      { data: runs },
+    ] = await Promise.all([
       supabase.from('user_targets').select('*').eq('user_id', uid).single(),
       supabase.from('user_profiles').select('full_name').eq('user_id', uid).single(),
+      supabase.from('meal_logs').select('id, meal_items(quantity_g, foods(calories, protein, carbs, fat))').eq('user_id', uid).eq('date', today),
+      supabase.from('daily_supplements').select('*').eq('user_id', uid),
+      supabase.from('supplement_logs').select('supplement_id').eq('user_id', uid).eq('date', today).eq('taken', true),
+      supabase.from('workout_logs').select('id, type').eq('user_id', uid).eq('date', today),
+      supabase.from('running_logs').select('distance_km').eq('user_id', uid).eq('date', today),
     ])
+
     if (t) setTargets(t)
     if (pr?.full_name) setUserName(pr.full_name)
 
-    const { data: meals } = await supabase.from('meal_logs').select('id, meal_items(quantity_g, foods(calories, protein, carbs, fat))').eq('user_id', uid).eq('date', today)
-    if (meals) {
-      let cal = 0, prot = 0, carb = 0, fat = 0
-      meals.forEach(m => m.meal_items?.forEach(item => {
-        const f = item.foods; const r = item.quantity_g / 100
-        cal += (f?.calories || 0) * r; prot += (f?.protein || 0) * r
-        carb += (f?.carbs || 0) * r; fat += (f?.fat || 0) * r
-      }))
-      setTodayNutrition({ calories: cal, protein: prot, carbs: carb, fat })
-    }
-
-    const { data: wo } = await supabase.from('workout_logs').select('id, type').eq('user_id', uid).eq('date', today)
-    const { data: runs } = await supabase.from('running_logs').select('distance_km').eq('user_id', uid).eq('date', today)
+    let cal = 0, prot = 0, carb = 0, fat = 0
+    ;(meals || []).forEach(m => m.meal_items?.forEach(item => {
+      const f = item.foods; const r = item.quantity_g / 100
+      cal += (f?.calories || 0) * r; prot += (f?.protein || 0) * r
+      carb += (f?.carbs || 0) * r; fat += (f?.fat || 0) * r
+    }))
+    const takenIds = new Set((supLogs || []).map(l => l.supplement_id))
+    ;(allSups || []).filter(s => takenIds.has(s.id)).forEach(s => {
+      cal  += s.calories  || 0
+      prot += s.protein_g || 0
+      carb += s.carbs_g   || 0
+      fat  += s.fat_g     || 0
+    })
+    setTodayNutrition({ calories: cal, protein: prot, carbs: carb, fat })
 
     let burned = 0
     ;(runs || []).forEach(r => { burned += (r.distance_km || 0) * 60 })
@@ -811,7 +930,7 @@ export default function Dashboard({ session, isAdmin }) {
       <QuoteCard isAdmin={isAdmin} />
 
       {/* Calorie ring */}
-      <div className="card mb-3 cursor-pointer" onClick={() => navigate('/nutritie')}>
+      <div className="card mb-1 cursor-pointer" onClick={() => navigate('/nutritie')}>
         <div className="flex items-center gap-4">
           <ProgressRing value={ringValue} max={targets.calories} size={100} strokeWidth={9} color="#4ade80" showTarget={true} />
           <div className="flex-1 space-y-2.5">
@@ -840,6 +959,118 @@ export default function Dashboard({ session, isAdmin }) {
         </div>
       </div>
 
+      {/* Quick add meal button */}
+      <button onClick={e => { e.stopPropagation(); openQuickAdd() }}
+        className="w-full mb-3 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-brand-green/10 border border-brand-green/20 text-brand-green text-sm font-medium hover:bg-brand-green/20 transition-all">
+        <span className="text-lg leading-none">+</span> Adaugă rapid ce ai mâncat
+      </button>
+
+      {/* Quick Add Modal */}
+      <Modal open={showQuickAdd} onClose={() => setShowQuickAdd(false)} title="Adaugă rapid">
+        {!quickPicking ? (
+          <div className="space-y-3">
+            <div>
+              <p className="text-xs text-slate-400 mb-1.5">Masă</p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {[['breakfast','☀️ Mic dejun'],['lunch','🌤️ Prânz'],['dinner','🌙 Cină'],['snack','🍎 Gustare']].map(([k,l]) => (
+                  <button key={k} onClick={() => setQuickMealType(k)}
+                    className={`py-2.5 rounded-xl text-sm font-medium transition-all ${quickMealType === k ? 'bg-brand-green text-dark-900' : 'bg-dark-700 text-slate-300 hover:bg-dark-600'}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button onClick={() => setQuickPicking(true)}
+              className="w-full bg-dark-700 border border-dark-600 rounded-xl px-3 py-3 text-left text-slate-400 hover:border-brand-green/40 text-sm">
+              🔍 {quickSelected ? <span className="text-white">{quickSelected.name}</span> : 'Caută aliment...'}
+            </button>
+            {quickSelected && (
+              <div className="bg-dark-700 rounded-xl p-3 space-y-2">
+                <p className="text-xs text-slate-400">{quickSelected.calories} kcal · P:{quickSelected.protein}g · C:{quickSelected.carbs}g · G:{quickSelected.fat}g (per 100g)</p>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-400 shrink-0">Cantitate (g)</label>
+                  <input className="input flex-1" type="number" value={quickQty}
+                    onChange={e => setQuickQty(e.target.value)} />
+                  {quickSelected.serving_size && (
+                    <button onClick={() => setQuickQty(String(quickSelected.serving_size))}
+                      className="text-xs bg-brand-blue/20 text-brand-blue px-2 py-1.5 rounded-lg shrink-0">
+                      1 porție
+                    </button>
+                  )}
+                </div>
+                {quickQty && <p className="text-xs text-brand-green font-medium">
+                  ≈ {Math.round(quickSelected.calories * parseFloat(quickQty) / 100)} kcal
+                </p>}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button onClick={() => setShowQuickAdd(false)} className="btn-ghost flex-1 py-3">Anulează</button>
+              <button onClick={saveQuickAdd} disabled={!quickSelected} className="btn-primary flex-1 py-3 disabled:opacity-40">Adaugă</button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <input className="input" autoFocus placeholder="Caută aliment..."
+              value={quickSearch} onChange={e => { setQuickSearch(e.target.value); setShowQuickNewForm(false) }} />
+            <div className="space-y-1.5 max-h-52 overflow-y-auto">
+              {(() => {
+                const results = quickFoods.filter(f => f.name.toLowerCase().includes(quickSearch.toLowerCase()))
+                if (results.length === 0) return (
+                  <div className="text-center py-3 space-y-2">
+                    <p className="text-slate-500 text-sm">Niciun aliment găsit.</p>
+                    {!showQuickNewForm && (
+                      <button onClick={() => { setShowQuickNewForm(true); setQuickNewForm(p => ({ ...p, name: quickSearch })) }}
+                        className="btn-primary w-full py-2.5 text-sm">
+                        + Adaugă „{quickSearch}" ca aliment nou
+                      </button>
+                    )}
+                  </div>
+                )
+                return results.map(f => (
+                  <button key={f.id} onClick={() => { setQuickSelected(f); setQuickPicking(false); setQuickSearch(''); setShowQuickNewForm(false) }}
+                    className="w-full flex justify-between items-center bg-dark-700 rounded-xl px-3 py-2.5 hover:bg-dark-600 text-left">
+                    <span className="text-sm text-white">{f.name}</span>
+                    <span className="text-xs text-slate-400">{f.calories} kcal/100g</span>
+                  </button>
+                ))
+              })()}
+            </div>
+
+            {/* Add new food anyway (even if results exist) */}
+            {!showQuickNewForm && quickSearch.length > 1 && quickFoods.filter(f => f.name.toLowerCase().includes(quickSearch.toLowerCase())).length > 0 && (
+              <button onClick={() => { setShowQuickNewForm(true); setQuickNewForm(p => ({ ...p, name: quickSearch })) }}
+                className="w-full py-2 rounded-xl border border-dashed border-dark-500 text-slate-500 text-xs hover:border-brand-green/40 hover:text-brand-green transition-all">
+                + Adaugă „{quickSearch}" ca aliment nou
+              </button>
+            )}
+
+            {showQuickNewForm && (
+              <div className="bg-dark-700 border border-brand-green/30 rounded-xl p-3 space-y-2">
+                <p className="text-xs font-semibold text-brand-green">✏️ Aliment nou</p>
+                <input className="input" placeholder="Nume *" value={quickNewForm.name}
+                  onChange={e => setQuickNewForm(p => ({ ...p, name: e.target.value }))} />
+                <div className="grid grid-cols-2 gap-2">
+                  {[['calories','kcal /100g *'],['protein','Proteine g'],['carbs','Carbo g'],['fat','Grăsimi g']].map(([k,lbl]) => (
+                    <div key={k}>
+                      <label className="text-[10px] text-slate-500 block mb-0.5">{lbl}</label>
+                      <input className="input" type="number" placeholder="0" value={quickNewForm[k]}
+                        onChange={e => setQuickNewForm(p => ({ ...p, [k]: e.target.value }))} />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => setShowQuickNewForm(false)} className="btn-ghost flex-1 py-2 text-sm">✕</button>
+                  <button onClick={saveQuickNewFood} disabled={!quickNewForm.name || !quickNewForm.calories}
+                    className="btn-primary flex-1 py-2 text-sm disabled:opacity-40">Salvează & selectează</button>
+                </div>
+              </div>
+            )}
+
+            <button onClick={() => { setQuickPicking(false); setShowQuickNewForm(false) }} className="btn-ghost w-full">← Înapoi</button>
+          </div>
+        )}
+      </Modal>
+
       {/* Antrenamente viitoare */}
       <UpcomingWorkoutsCard session={session} />
 
@@ -847,7 +1078,7 @@ export default function Dashboard({ session, isAdmin }) {
       <div className="mb-3"><WaterCard session={session} targets={targets} /></div>
 
       {/* Supplements */}
-      <div className="mb-3"><SupplementsCard session={session} /></div>
+      <div className="mb-3"><SupplementsCard session={session} onToggle={loadData} /></div>
 
       {/* Shopping List */}
       <ShoppingListCard session={session} />

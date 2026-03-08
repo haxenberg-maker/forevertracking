@@ -55,23 +55,29 @@ const THEME_VARS = {
     '--border':'#cbd5e1',
   },
   // ── Teme noi moderne ──
-  midnight: {
-    '--bg-900':'#070714','--bg-800':'#0e0e28','--bg-700':'#15153d','--bg-600':'#1e1e52','--bg-500':'#272768',
-    '--accent':'#818cf8','--accent-fg':'#1e1b4b',
-    '--t1':'#eef2ff','--t2':'#e0e7ff','--t3':'#c7d2fe','--t4':'#a5b4fc','--t5':'#818cf8','--t6':'#6366f1',
-    '--border':'#1e1e52',
+  abyss: {
+    '--bg-900':'#010203','--bg-800':'#04080d','--bg-700':'#070e14','--bg-600':'#0b1520','--bg-500':'#101d2b',
+    '--accent':'#00e5ff','--accent-fg':'#001a1f',
+    '--t1':'#e0faff','--t2':'#b3f5ff','--t3':'#80eeff','--t4':'#33e0ff','--t5':'#00e5ff','--t6':'#00b8cc',
+    '--border':'#0d1f2d',
   },
-  forest: {
-    '--bg-900':'#030d06','--bg-800':'#071a0d','--bg-700':'#0c2714','--bg-600':'#12361c','--bg-500':'#184626',
-    '--accent':'#34d399','--accent-fg':'#022c22',
-    '--t1':'#ecfdf5','--t2':'#d1fae5','--t3':'#a7f3d0','--t4':'#6ee7b7','--t5':'#34d399','--t6':'#10b981',
-    '--border':'#12361c',
+  velvet: {
+    '--bg-900':'#0a0005','--bg-800':'#140008','--bg-700':'#1e000d','--bg-600':'#2e0015','--bg-500':'#40001e',
+    '--accent':'#c8003a','--accent-fg':'#0a0005',
+    '--t1':'#fff0f3','--t2':'#ffc2cf','--t3':'#ff8099','--t4':'#ff4060','--t5':'#c8003a','--t6':'#96002a',
+    '--border':'#3d0018',
   },
-  rose: {
-    '--bg-900':'#140508','--bg-800':'#200810','--bg-700':'#30101a','--bg-600':'#421526','--bg-500':'#581b32',
-    '--accent':'#fb7185','--accent-fg':'#4c0519',
-    '--t1':'#fff1f2','--t2':'#ffe4e6','--t3':'#fecdd3','--t4':'#fda4af','--t5':'#fb7185','--t6':'#f43f5e',
-    '--border':'#42152a',
+  barbie: {
+    '--bg-900':'#1a0022','--bg-800':'#2e0040','--bg-700':'#420060','--bg-600':'#600080','--bg-500':'#7800a0',
+    '--accent':'#ff10f0','--accent-fg':'#1a0022',
+    '--t1':'#fff0ff','--t2':'#ffccff','--t3':'#ff99ff','--t4':'#ff55ff','--t5':'#ff10f0','--t6':'#cc00cc',
+    '--border':'#6600aa',
+  },
+  gothic: {
+    '--bg-900':'#080508','--bg-800':'#100d10','--bg-700':'#1a141a','--bg-600':'#251a25','--bg-500':'#30223a',
+    '--accent':'#9b30ff','--accent-fg':'#1a0040',
+    '--t1':'#f0e6ff','--t2':'#dcc8ff','--t3':'#c4a0ff','--t4':'#a870ff','--t5':'#9b30ff','--t6':'#7a00ff',
+    '--border':'#2d1a3d',
   },
   slate: {
     '--bg-900':'#0c1320','--bg-800':'#131e2e','--bg-700':'#1a293d','--bg-600':'#22364f','--bg-500':'#2b4464',
@@ -82,14 +88,15 @@ const THEME_VARS = {
 }
 
 const THEME_META = [
-  { key: 'dark',     label: 'Dark',     preview: ['#0f0f13','#1a1a24','#4ade80'] },
-  { key: 'ocean',    label: 'Ocean',    preview: ['#040d18','#0c1f38','#38bdf8'] },
-  { key: 'vibe',     label: 'Vibe',     preview: ['#120700','#2c1500','#fb923c'] },
-  { key: 'midnight', label: 'Midnight', preview: ['#070714','#15153d','#818cf8'] },
-  { key: 'forest',   label: 'Forest',   preview: ['#030d06','#0c2714','#34d399'] },
-  { key: 'rose',     label: 'Rose',     preview: ['#140508','#30101a','#fb7185'] },
-  { key: 'slate',    label: 'Slate',    preview: ['#0c1320','#1a293d','#38bdf8'] },
-  { key: 'light',    label: 'Light',    preview: ['#f1f5f9','#ffffff','#16a34a'] },
+  { key: 'dark',    label: 'Dark',    preview: ['#0f0f13','#1a1a24','#4ade80'] },
+  { key: 'ocean',   label: 'Ocean',   preview: ['#040d18','#0c1f38','#38bdf8'] },
+  { key: 'abyss',   label: 'Abyss',   preview: ['#010203','#070e14','#00e5ff'] },
+  { key: 'vibe',    label: 'Vibe',    preview: ['#120700','#2c1500','#fb923c'] },
+  { key: 'gothic',  label: 'Gothic',  preview: ['#080508','#1a141a','#9b30ff'] },
+  { key: 'velvet',  label: 'Velvet',  preview: ['#0a0005','#1e000d','#c8003a'] },
+  { key: 'barbie',  label: 'Barbie',  preview: ['#1a0022','#420060','#ff10f0'] },
+  { key: 'slate',   label: 'Slate',   preview: ['#0c1320','#1a293d','#38bdf8'] },
+  { key: 'light',   label: 'Light',   preview: ['#f1f5f9','#ffffff','#16a34a'] },
 ]
 
 function applyTheme(key) {

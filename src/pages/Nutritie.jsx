@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import Modal from '../components/Modal'
+import { getCached, setCached, invalidateCache } from '../lib/cache'
 
 function getToday() {
   const d = new Date()
@@ -49,23 +50,48 @@ function AziTab({ session }) {
   const [selectedTemplate, setSelectedTemplate] = useState(null)
   const [quantity, setQuantity] = useState('100')
   const [unit, setUnit] = useState('g')
+  const [mealPct, setMealPct] = useState(100)  // % din masă mâncată
   const [search, setSearch] = useState('')
   const [pickingFood, setPickingFood] = useState(false)
   const [pickingTemplate, setPickingTemplate] = useState(false)
   const [editingItem, setEditingItem] = useState(null)
   const [editQty, setEditQty] = useState('')
   const [collapsed, setCollapsed] = useState({})
+  const [takenSupplements, setTakenSupplements] = useState([])
+  const [showNewFoodForm, setShowNewFoodForm] = useState(false)
+  const [newFoodForm, setNewFoodForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '' })
 
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
-    loadMeals()
-    const { data: foods } = await supabase.from('foods').select('*').order('name')
-    setAllFoods(foods || [])
-    const { data: pantry } = await supabase.from('pantry_items').select('*').eq('user_id', session.user.id).eq('list_type', 'stock')
+    // Use cached foods if available (saves ~200ms on revisit)
+    const cachedFoods = getCached('foods')
+    const [
+      foodsRes,
+      { data: pantry },
+      { data: templates },
+      { data: sups },
+    ] = await Promise.all([
+      cachedFoods ? Promise.resolve({ data: cachedFoods }) : supabase.from('foods').select('*').order('name'),
+      supabase.from('pantry_items').select('*').eq('user_id', session.user.id).eq('list_type', 'stock'),
+      supabase.from('meal_templates')
+        .select(`id, name, user_id, is_public, meal_template_items(quantity_g, foods(id, name, calories, protein, carbs, fat))`)
+        .order('name'),
+      supabase.from('daily_supplements').select('*').eq('user_id', session.user.id),
+    ])
+    const foods = foodsRes.data || []
+    if (!cachedFoods) setCached('foods', foods)
+    setAllFoods(foods)
     setPantryItems(pantry || [])
-    const { data: templates } = await supabase.from('meal_templates').select(`id, name, meal_template_items(quantity_g, foods(id, name, calories, protein, carbs, fat))`).order('name')
-    setMealTemplates(templates || [])
+    setMealTemplates((templates || []).filter(t => t.user_id === session.user.id || t.is_public === true))
+    if (sups?.length) {
+      const { data: logs } = await supabase.from('supplement_logs').select('*').eq('user_id', session.user.id).eq('date', today).eq('taken', true)
+      const takenIds = new Set((logs || []).map(l => l.supplement_id))
+      setTakenSupplements((sups || []).filter(s => takenIds.has(s.id) && (s.calories > 0 || s.protein_g > 0 || s.carbs_g > 0 || s.fat_g > 0)))
+    } else {
+      setTakenSupplements([])
+    }
+    loadMeals()
   }
 
   async function loadMeals() {
@@ -98,8 +124,8 @@ function AziTab({ session }) {
       const { data } = await supabase.from('meal_logs').insert({ user_id: session.user.id, date: today, meal_type: activeMealType }).select().single()
       mealLog = data
     }
-    const qg = toGrams(quantity, unit, selectedFood)
-    await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: selectedFood.id, quantity_g: qg, group_id: null, group_name: null })
+    const qg = toGrams(quantity, unit, selectedFood) * (mealPct / 100)
+    await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: selectedFood.id, quantity_g: Math.round(qg * 10) / 10, group_id: null, group_name: null })
     closeAddModal(); loadMeals()
   }
 
@@ -111,8 +137,15 @@ function AziTab({ session }) {
       mealLog = data
     }
     const gid = genUUID()
+    const pct = mealPct / 100
     await supabase.from('meal_items').insert(
-      selectedTemplate.meal_template_items.map(i => ({ meal_log_id: mealLog.id, food_id: i.foods.id, quantity_g: i.quantity_g, group_id: gid, group_name: selectedTemplate.name }))
+      selectedTemplate.meal_template_items.map(i => ({
+        meal_log_id: mealLog.id,
+        food_id: i.foods.id,
+        quantity_g: Math.round(i.quantity_g * pct * 10) / 10,
+        group_id: gid,
+        group_name: mealPct < 100 ? `${selectedTemplate.name} (${mealPct}%)` : selectedTemplate.name
+      }))
     )
     closeAddModal(); loadMeals()
   }
@@ -127,7 +160,42 @@ function AziTab({ session }) {
 
   function closeAddModal() {
     setShowAddModal(false); setSelectedFood(null); setSelectedTemplate(null)
-    setQuantity('100'); setUnit('g'); setSearch(''); setPickingFood(false); setPickingTemplate(false); setAddMode('food')
+    setQuantity('100'); setUnit('g'); setMealPct(100); setSearch(''); setPickingFood(false); setPickingTemplate(false); setAddMode('food')
+    setShowNewFoodForm(false); setNewFoodForm({ name: '', calories: '', protein: '', carbs: '', fat: '' })
+  }
+
+  async function saveNewFoodInline() {
+    if (!newFoodForm.name || !newFoodForm.calories) return
+    // Check if food with same name already exists
+    const existing = allFoods.find(f => f.name.toLowerCase() === newFoodForm.name.toLowerCase())
+    if (existing) {
+      // Offer to use existing food instead
+      if (confirm(`"${existing.name}" există deja (${existing.calories} kcal/100g). Folosești alimentul existent?`)) {
+        setSelectedFood(existing)
+        setShowNewFoodForm(false)
+        setPickingFood(false)
+        setSearch('')
+        return
+      }
+      // User chose to add anyway (different values)
+    }
+    const { data: food } = await supabase.from('foods').insert({
+      user_id: session.user.id,
+      user_email: session.user.email,
+      name: newFoodForm.name,
+      calories: parseFloat(newFoodForm.calories) || 0,
+      protein: parseFloat(newFoodForm.protein) || 0,
+      carbs: parseFloat(newFoodForm.carbs) || 0,
+      fat: parseFloat(newFoodForm.fat) || 0,
+    }).select().single()
+    if (food) {
+      const newFoods = [...allFoods, food].sort((a,b) => a.name.localeCompare(b.name))
+      setAllFoods(newFoods)
+      setSelectedFood(food)
+      setShowNewFoodForm(false)
+      setPickingFood(false)
+      setSearch('')
+    }
   }
 
   function groupItems(items) {
@@ -140,10 +208,24 @@ function AziTab({ session }) {
     return { ungrouped, groups }
   }
 
-  const totalNutrition = meals.reduce((acc, m) => {
+  const mealNutrition = meals.reduce((acc, m) => {
     const n = calcNutr(m.meal_items || [])
     return { calories: acc.calories + n.calories, protein: acc.protein + n.protein, carbs: acc.carbs + n.carbs, fat: acc.fat + n.fat }
   }, { calories: 0, protein: 0, carbs: 0, fat: 0 })
+
+  const supNutrition = takenSupplements.reduce((acc, s) => ({
+    calories: acc.calories + (s.calories || 0),
+    protein:  acc.protein  + (s.protein_g || 0),
+    carbs:    acc.carbs    + (s.carbs_g || 0),
+    fat:      acc.fat      + (s.fat_g || 0),
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0 })
+
+  const totalNutrition = {
+    calories: mealNutrition.calories + supNutrition.calories,
+    protein:  mealNutrition.protein  + supNutrition.protein,
+    carbs:    mealNutrition.carbs    + supNutrition.carbs,
+    fat:      mealNutrition.fat      + supNutrition.fat,
+  }
 
   const pantrySuggestions = search.length > 1
     ? pantryItems.filter(p => p.name.toLowerCase().includes(search.toLowerCase())).slice(0, 5)
@@ -243,6 +325,40 @@ function AziTab({ session }) {
         )
       })}
 
+      {/* Suplimente luate azi cu macronutrienți */}
+      {takenSupplements.length > 0 && (
+        <div className="card">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-lg">💊</span>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-white">Suplimente</p>
+              <p className="text-xs text-slate-500">Luate azi · contribuie la total</p>
+            </div>
+            <span className="text-xs text-slate-500">
+              {Math.round(supNutrition.calories)} kcal
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {takenSupplements.map(s => (
+              <div key={s.id} className="flex items-center justify-between bg-dark-700 rounded-xl px-3 py-2">
+                <div>
+                  <p className="text-xs font-medium text-brand-green">✓ {s.name}</p>
+                  <p className="text-xs text-slate-500">{s.amount_g} {s.unit}</p>
+                </div>
+                <div className="text-right text-xs space-y-0.5">
+                  {s.calories > 0 && <p className="text-slate-300">{s.calories} kcal</p>}
+                  <p className="text-slate-500">
+                    {s.protein_g > 0 && <span className="text-brand-blue mr-1.5">P:{s.protein_g}g</span>}
+                    {s.carbs_g > 0 && <span className="text-brand-orange mr-1.5">C:{s.carbs_g}g</span>}
+                    {s.fat_g > 0 && <span className="text-brand-purple">G:{s.fat_g}g</span>}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <Modal open={showAddModal} onClose={closeAddModal} title={`Adaugă la ${MEAL_TYPES.find(m => m.key === activeMealType)?.label || ''}`}>
         {!pickingFood && !pickingTemplate && (
           <div className="space-y-3">
@@ -276,6 +392,25 @@ function AziTab({ session }) {
                         <p className="text-xs text-slate-500 mt-1">≈ {Math.round(toGrams(quantity, unit, selectedFood))}g</p>
                       )}
                     </div>
+                    {/* % din masă */}
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="text-xs text-slate-400">Cât ai mâncat din porție?</label>
+                        <span className="text-sm font-bold text-brand-green">{mealPct}%</span>
+                      </div>
+                      <input type="range" min={10} max={100} step={5} value={mealPct}
+                        onChange={e => setMealPct(parseInt(e.target.value))}
+                        className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+                        style={{ accentColor: '#4ade80' }} />
+                      <div className="flex justify-between text-[10px] text-slate-600 mt-0.5">
+                        <span>10%</span><span>50%</span><span>100%</span>
+                      </div>
+                      {mealPct < 100 && (
+                        <p className="text-xs text-brand-orange mt-1">
+                          ≈ {Math.round(toGrams(quantity, unit, selectedFood) * mealPct / 100)}g · {Math.round((selectedFood.calories || 0) * toGrams(quantity, unit, selectedFood) * mealPct / 10000)} kcal
+                        </p>
+                      )}
+                    </div>
                   </div>
                 )}
                 <button onClick={addFood} disabled={!selectedFood} className="btn-primary w-full py-3">Adaugă aliment</button>
@@ -285,18 +420,45 @@ function AziTab({ session }) {
                 <button onClick={() => setPickingTemplate(true)} className="w-full bg-dark-700 border border-dark-600 rounded-xl px-3 py-3 text-left text-slate-400 hover:border-brand-blue/50 text-sm">
                   🔍 {selectedTemplate ? selectedTemplate.name : 'Caută masă...'}
                 </button>
+
+                {/* Slider % — mereu vizibil în modul masă */}
+                <div className="bg-dark-700 rounded-xl p-3 space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-xs text-slate-400">Cât ai mâncat din masă?</label>
+                    <span className="text-sm font-bold text-brand-green">{mealPct}%</span>
+                  </div>
+                  <input type="range" min={10} max={100} step={5} value={mealPct}
+                    onChange={e => setMealPct(parseInt(e.target.value))}
+                    className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+                    style={{ accentColor: '#4ade80' }} />
+                  <div className="flex justify-between text-[10px] text-slate-600">
+                    <span>10%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+                  </div>
+                </div>
+
                 {selectedTemplate && (
-                  <div className="bg-brand-blue/10 border border-brand-blue/20 rounded-xl p-3 space-y-1">
+                  <div className="bg-brand-blue/10 border border-brand-blue/20 rounded-xl p-3 space-y-1.5">
+                    <p className="text-xs font-medium text-slate-300 mb-1">{selectedTemplate.name}</p>
                     {selectedTemplate.meal_template_items.map((i, idx) => (
                       <div key={idx} className="flex justify-between text-xs">
                         <span className="text-slate-300">{i.foods?.name}</span>
-                        <span className="text-slate-400">{i.quantity_g}g</span>
+                        <span className="text-slate-400">
+                          {mealPct < 100
+                            ? <><span className="line-through opacity-40 mr-1">{i.quantity_g}g</span><span className="text-brand-orange">{Math.round(i.quantity_g * mealPct / 10) / 10}g</span></>
+                            : `${i.quantity_g}g`}
+                        </span>
                       </div>
                     ))}
-                    <p className="text-xs text-brand-blue mt-1 pt-1 border-t border-dark-600">{Math.round(calcNutr(selectedTemplate.meal_template_items).calories)} kcal total</p>
+                    <p className={`text-xs pt-1.5 border-t border-dark-600 font-medium ${mealPct < 100 ? 'text-brand-orange' : 'text-brand-blue'}`}>
+                      {Math.round(calcNutr(selectedTemplate.meal_template_items).calories * mealPct / 100)} kcal
+                      {mealPct < 100 && <span className="text-slate-500 font-normal"> din {Math.round(calcNutr(selectedTemplate.meal_template_items).calories)} total</span>}
+                    </p>
                   </div>
                 )}
-                <button onClick={addTemplate} disabled={!selectedTemplate} className="btn-primary w-full py-3">Adaugă masa întreagă</button>
+
+                <button onClick={addTemplate} disabled={!selectedTemplate} className="btn-primary w-full py-3 disabled:opacity-40">
+                  {mealPct < 100 ? `Adaugă ${mealPct}% din masă` : 'Adaugă masa întreagă'}
+                </button>
               </>
             )}
           </div>
@@ -326,8 +488,19 @@ function AziTab({ session }) {
                 </div>
               </div>
             )}
-            <div className="space-y-1.5 max-h-56 overflow-y-auto">
-              {filteredFoods.length === 0 ? <p className="text-slate-500 text-sm text-center py-4">Niciun aliment găsit.</p>
+            <div className="space-y-1.5 max-h-52 overflow-y-auto">
+              {filteredFoods.length === 0
+                ? (
+                  <div className="text-center py-3 space-y-2">
+                    <p className="text-slate-500 text-sm">Niciun aliment găsit.</p>
+                    {!showNewFoodForm && (
+                      <button onClick={() => { setShowNewFoodForm(true); setNewFoodForm(p => ({ ...p, name: search })) }}
+                        className="btn-primary w-full py-2.5 text-sm">
+                        + Adaugă „{search}" ca aliment nou
+                      </button>
+                    )}
+                  </div>
+                )
                 : filteredFoods.map(f => (
                   <button key={f.id} onClick={() => { setSelectedFood(f); setPickingFood(false); setSearch('') }}
                     className="w-full flex justify-between items-center bg-dark-700 rounded-xl px-3 py-2.5 hover:bg-dark-600 text-left">
@@ -336,7 +509,38 @@ function AziTab({ session }) {
                   </button>
                 ))}
             </div>
-            <button onClick={() => { setPickingFood(false); setSearch('') }} className="btn-ghost w-full">← Înapoi</button>
+
+            {/* Always show option to add new food, even when results exist */}
+            {!showNewFoodForm && search.length > 1 && filteredFoods.length > 0 && (
+              <button onClick={() => { setShowNewFoodForm(true); setNewFoodForm(p => ({ ...p, name: search })) }}
+                className="w-full py-2 rounded-xl border border-dashed border-dark-500 text-slate-500 text-xs hover:border-brand-green/40 hover:text-brand-green transition-all">
+                + Adaugă „{search}" ca aliment nou
+              </button>
+            )}
+
+            {showNewFoodForm && (
+              <div className="bg-dark-700 border border-brand-green/30 rounded-xl p-3 space-y-2">
+                <p className="text-xs font-semibold text-brand-green">✏️ Aliment nou</p>
+                <input className="input" placeholder="Nume *" value={newFoodForm.name}
+                  onChange={e => setNewFoodForm(p => ({ ...p, name: e.target.value }))} />
+                <div className="grid grid-cols-2 gap-2">
+                  {[['calories','kcal /100g *'],['protein','Proteine g'],['carbs','Carbohidrați g'],['fat','Grăsimi g']].map(([k,lbl]) => (
+                    <div key={k}>
+                      <label className="text-[10px] text-slate-500 block mb-0.5">{lbl}</label>
+                      <input className="input" type="number" placeholder="0" value={newFoodForm[k]}
+                        onChange={e => setNewFoodForm(p => ({ ...p, [k]: e.target.value }))} />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => setShowNewFoodForm(false)} className="btn-ghost flex-1 py-2 text-sm">✕</button>
+                  <button onClick={saveNewFoodInline} disabled={!newFoodForm.name || !newFoodForm.calories}
+                    className="btn-primary flex-1 py-2 text-sm disabled:opacity-40">Salvează & selectează</button>
+                </div>
+              </div>
+            )}
+
+            <button onClick={() => { setPickingFood(false); setSearch(''); setShowNewFoodForm(false) }} className="btn-ghost w-full">← Înapoi</button>
           </div>
         )}
         {pickingTemplate && (
@@ -346,10 +550,14 @@ function AziTab({ session }) {
               {filteredTemplates.length === 0 ? <p className="text-slate-500 text-sm text-center py-4">Nicio masă găsită.</p>
                 : filteredTemplates.map(t => {
                   const n = calcNutr(t.meal_template_items)
+                  const isOwn = t.user_id === session.user.id
                   return (
                     <button key={t.id} onClick={() => { setSelectedTemplate(t); setPickingTemplate(false); setSearch('') }}
                       className="w-full flex justify-between items-center bg-dark-700 rounded-xl px-3 py-2.5 hover:bg-dark-600 text-left">
-                      <span className="text-sm text-white">{t.name}</span>
+                      <div>
+                        <p className="text-sm text-white">{t.name}</p>
+                        {!isOwn && <p className="text-xs text-brand-blue">🌍 Publică</p>}
+                      </div>
                       <span className="text-xs text-slate-400">{Math.round(n.calories)} kcal</span>
                     </button>
                   )
@@ -396,10 +604,11 @@ function MeseTab({ session, isAdmin }) {
   async function loadAll() {
     setLoading(true)
     const { data: t } = await supabase.from('meal_templates').select(`
-      id, name, user_id,
+      id, name, user_id, is_public,
       meal_template_items(id, quantity_g, foods(id, name, calories, protein, carbs, fat))
     `).order('name')
-    setTemplates(t || [])
+    // Show only own templates + public ones (hide other users' private templates)
+    setTemplates((t || []).filter(r => r.user_id === session.user.id || r.is_public === true))
     const { data: f } = await supabase.from('foods').select('*').order('name')
     setAllFoods(f || [])
     setLoading(false)
@@ -504,7 +713,15 @@ function MeseTab({ session, isAdmin }) {
                       className="flex items-center gap-2 flex-1 text-left min-w-0">
                       <span className="text-lg">🍽️</span>
                       <div className="min-w-0">
-                        <p className="font-semibold text-white text-sm">{t.name}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-semibold text-white text-sm">{t.name}</p>
+                          {isOwn && (
+                            <span className={`text-xs px-1.5 py-0.5 rounded-full shrink-0 ${t.is_public ? 'bg-brand-blue/20 text-brand-blue' : 'bg-dark-600 text-slate-500'}`}>
+                              {t.is_public ? '🌍' : '🔒'}
+                            </span>
+                          )}
+                          {!isOwn && t.is_public && <span className="text-xs text-brand-blue shrink-0">🌍</span>}
+                        </div>
                         <p className="text-xs text-slate-400">{Math.round(n.calories)} kcal · {t.meal_template_items.length} alim.</p>
                       </div>
                       <span className="text-xs text-slate-600 ml-2 shrink-0">{isOpen ? '▲' : '▼'}</span>
@@ -631,10 +848,15 @@ function AlimenteTab({ session, isAdmin }) {
 
   useEffect(() => { loadFoods() }, [])
 
-  async function loadFoods() {
+  async function loadFoods(bust = false) {
     setLoading(true)
+    if (bust) invalidateCache('foods')
+    const cached = getCached('foods')
+    if (cached) { setFoods(cached); setLoading(false); return }
     const { data } = await supabase.from('foods').select('*').order('name')
-    setFoods(data || [])
+    const foods = data || []
+    setCached('foods', foods)
+    setFoods(foods)
     setLoading(false)
   }
 
@@ -646,6 +868,14 @@ function AlimenteTab({ session, isAdmin }) {
 
   async function saveFood() {
     if (!form.name || !form.calories) return
+    // Check duplicate by name (case-insensitive), skip own record when editing
+    const duplicate = foods.find(f =>
+      f.name.toLowerCase() === form.name.toLowerCase() &&
+      (!editFood || f.id !== editFood.id)
+    )
+    if (duplicate) {
+      if (!confirm(`Există deja un aliment numit "${duplicate.name}". Adaugi oricum?`)) return
+    }
     const data = {
       user_id: session.user.id,
       user_email: session.user.email,
@@ -659,11 +889,11 @@ function AlimenteTab({ session, isAdmin }) {
     }
     if (editFood) await supabase.from('foods').update(data).eq('id', editFood.id)
     else await supabase.from('foods').insert(data)
-    setShowModal(false); loadFoods()
+    setShowModal(false); loadFoods(true)
   }
 
   async function deleteFood(id) {
-    if (confirm('Ștergi alimentul?')) { await supabase.from('foods').delete().eq('id', id); loadFoods() }
+    if (confirm('Ștergi alimentul?')) { await supabase.from('foods').delete().eq('id', id); loadFoods(true) }
   }
 
   async function handleCSV(e) {
@@ -676,7 +906,7 @@ function AlimenteTab({ session, isAdmin }) {
       }).filter(Boolean)
     )
     if (rows?.length) await supabase.from('foods').insert(rows)
-    e.target.value = ''; loadFoods()
+    e.target.value = ''; loadFoods(true)
     alert(`✅ ${rows?.length || 0} alimente importate!`)
   }
 
@@ -827,8 +1057,8 @@ export default function Nutritie({ session, isAdmin }) {
   const [tab, setTab] = useState('azi')
   const tabs = [
     { key: 'azi',      label: '📅 Azi' },
-    { key: 'mese',     label: '🍽️ Mese' },
     { key: 'alimente', label: '🥦 Alimente' },
+    { key: 'mese',     label: '🍽️ Mese' },
   ]
   return (
     <div className="page fade-in">

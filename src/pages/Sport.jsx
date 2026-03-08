@@ -1183,8 +1183,8 @@ function PlanTab({ session, isAdmin }) {
   const [students, setStudents] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeSection, setActiveSection] = useState('mine') // 'mine' | 'students'
-
-  const [studentFeedback, setStudentFeedback] = useState({}) // scheduleId -> [{date, feeling, notes, studentName}]
+  const [studentFeedback, setStudentFeedback] = useState({})
+  const [pastDoneLogs, setPastDoneLogs] = useState({}) // scheduleId -> Set of dates done
 
   useEffect(() => { load() }, [isAdmin])
 
@@ -1251,6 +1251,21 @@ function PlanTab({ session, isAdmin }) {
     setMySchedules(sched || [])
     setStudentSchedules(studentSched)
     setExceptions(excMap)
+
+    // Load last 30 days of done logs for own schedules
+    if (sched?.length) {
+      const past30 = new Date(); past30.setDate(past30.getDate() - 30)
+      const d30 = `${past30.getFullYear()}-${String(past30.getMonth()+1).padStart(2,'0')}-${String(past30.getDate()).padStart(2,'0')}`
+      const schedIds = sched.map(s => s.id)
+      const { data: doneLogs } = await supabase.from('workout_schedule_logs')
+        .select('schedule_id, date, done').in('schedule_id', schedIds).eq('done', true).gte('date', d30)
+      const doneMap = {}
+      ;(doneLogs || []).forEach(l => {
+        if (!doneMap[l.schedule_id]) doneMap[l.schedule_id] = new Set()
+        doneMap[l.schedule_id].add(l.date)
+      })
+      setPastDoneLogs(doneMap)
+    }
 
     // Load feedback for student schedules (admin view)
     if (studentSched.length) {
@@ -1426,12 +1441,23 @@ function PlanTab({ session, isAdmin }) {
     const assignedByProfile = meta.assigned_by ? adminProfiles[meta.assigned_by] : null
     const assignedByName = assignedByProfile?.full_name || assignedByProfile?.email
     const exceptCount = (exceptions[s.id] || []).length
+
+    // Check if this schedule was completed in the past
+    const doneDates = pastDoneLogs[s.id]
+    const isPastSingleDone = s.recurrence === 'once' && s.scheduled_date && s.scheduled_date < today && doneDates?.has(s.scheduled_date)
+    // For weekly: check if done today
+    const isDoneToday = doneDates?.has(today)
+
     return (
-      <div key={s.id} className="card space-y-2">
+      <div key={s.id} className={`card space-y-2 ${isPastSingleDone ? 'opacity-75 border border-brand-green/30 bg-brand-green/5' : ''}`}>
         <div className="flex items-start gap-3">
           <span className="text-2xl mt-0.5">{SPORT_TYPES.find(t => t.key === s.type)?.label.split(' ')[0] || '⚡'}</span>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-white">{s.name}</p>
+            <div className="flex items-center gap-1.5">
+              <p className="text-sm font-semibold text-white truncate">{s.name}</p>
+              {isPastSingleDone && <span className="text-xs bg-brand-green/20 text-brand-green border border-brand-green/30 px-1.5 py-0.5 rounded-full shrink-0">✓ Îndeplinit</span>}
+              {isDoneToday && !isPastSingleDone && <span className="text-xs bg-brand-green/20 text-brand-green border border-brand-green/30 px-1.5 py-0.5 rounded-full shrink-0">✓ Azi</span>}
+            </div>
             <p className="text-xs text-slate-400 mt-0.5">{recurrenceLabel(s)}{meta.time ? ` · ⏰ ${meta.time}` : ''}</p>
           </div>
           <div className="flex gap-1.5 shrink-0">
@@ -1606,11 +1632,38 @@ function PlanTab({ session, isAdmin }) {
             )}
           </div>
 
-          {/* 2. Oră */}
+          {/* 2. Oră — selector explicit 24h */}
           <div>
             <label className="text-xs text-slate-400 block mb-1">Oră (opțional)</label>
-            <input className="input" type="time" step="60" value={form.time}
-              onChange={e => setForm(p => ({ ...p, time: e.target.value }))} />
+            <div className="flex gap-2 items-center">
+              <select className="input flex-1" value={form.time.split(':')[0] || ''}
+                onChange={e => {
+                  const h = e.target.value
+                  const m = form.time.split(':')[1] || '00'
+                  setForm(p => ({ ...p, time: h ? `${h}:${m}` : '' }))
+                }}>
+                <option value="">—</option>
+                {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(h => (
+                  <option key={h} value={h}>{h}h</option>
+                ))}
+              </select>
+              <span className="text-slate-500 text-sm font-bold">:</span>
+              <select className="input flex-1" value={form.time.split(':')[1] || '00'}
+                disabled={!form.time.split(':')[0]}
+                onChange={e => {
+                  const h = form.time.split(':')[0] || '00'
+                  setForm(p => ({ ...p, time: `${h}:${e.target.value}` }))
+                }}>
+                {['00','05','10','15','20','25','30','35','40','45','50','55'].map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+              {form.time && (
+                <button onClick={() => setForm(p => ({ ...p, time: '' }))}
+                  className="text-slate-600 hover:text-red-400 px-2 py-2 text-lg transition-colors">×</button>
+              )}
+            </div>
+            {form.time && <p className="text-xs text-brand-green mt-1">⏰ {form.time}</p>}
           </div>
 
           {/* 3. Tip */}
@@ -1627,7 +1680,7 @@ function PlanTab({ session, isAdmin }) {
           </div>
 
           {/* 4. Importanță + Dificultate */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className={['task','nutrition','wellness','medical'].includes(form.type) ? '' : 'grid grid-cols-2 gap-3'}>
             <div>
               <label className="text-xs text-slate-400 block mb-1.5">Importanță</label>
               <div className="space-y-1.5">
@@ -1639,17 +1692,19 @@ function PlanTab({ session, isAdmin }) {
                 ))}
               </div>
             </div>
-            <div>
-              <label className="text-xs text-slate-400 block mb-1.5">Dificultate</label>
-              <div className="space-y-1.5">
-                {DIFFICULTY.map(d => (
-                  <button key={d.key} onClick={() => setForm(p => ({ ...p, difficulty: d.key }))}
-                    className={`w-full py-2 rounded-xl text-xs font-medium border transition-all ${form.difficulty === d.key ? d.cls : 'bg-dark-700 text-slate-400 border-transparent'}`}>
-                    {d.label}
-                  </button>
-                ))}
+            {!['task','nutrition','wellness','medical'].includes(form.type) && (
+              <div>
+                <label className="text-xs text-slate-400 block mb-1.5">Dificultate</label>
+                <div className="space-y-1.5">
+                  {DIFFICULTY.map(d => (
+                    <button key={d.key} onClick={() => setForm(p => ({ ...p, difficulty: d.key }))}
+                      className={`w-full py-2 rounded-xl text-xs font-medium border transition-all ${form.difficulty === d.key ? d.cls : 'bg-dark-700 text-slate-400 border-transparent'}`}>
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* 5. Nume */}

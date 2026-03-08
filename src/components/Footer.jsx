@@ -3,8 +3,8 @@ import { useLocation, useNavigate } from 'react-router-dom'
 const baseTabs = [
   { path: '/',         label: 'Acasă',   icon: '🏠' },
   { path: '/nutritie', label: 'Nutriție', icon: '🥗' },
-  { path: '/camara',   label: 'Cămară',  icon: '🧺' },
   { path: '/sport',    label: 'Plan',     icon: '📋' },
+  { path: '/camara',   label: 'Cămară',  icon: '🧺' },
   { path: '/profil',   label: 'Profil',  icon: '👤' },
 ]
 
