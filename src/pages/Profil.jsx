@@ -73,6 +73,18 @@ const THEME_VARS = {
     '--t1':'#fff1f2','--t2':'#ffe4e6','--t3':'#fecdd3','--t4':'#fda4af','--t5':'#fb7185','--t6':'#f43f5e',
     '--border':'#42152a',
   },
+  barbie: {
+    '--bg-900':'#1a0016','--bg-800':'#2d0028','--bg-700':'#3f003a','--bg-600':'#5c005a','--bg-500':'#7a0075',
+    '--accent':'#ff2d9b','--accent-fg':'#1a0016',
+    '--t1':'#fff0f9','--t2':'#ffd6f0','--t3':'#ffb3e6','--t4':'#ff80d3','--t5':'#ff2d9b','--t6':'#e0008c',
+    '--border':'#5c005a',
+  },
+  gothic: {
+    '--bg-900':'#080508','--bg-800':'#100d10','--bg-700':'#1a141a','--bg-600':'#251a25','--bg-500':'#30223a',
+    '--accent':'#9b30ff','--accent-fg':'#1a0040',
+    '--t1':'#f0e6ff','--t2':'#dcc8ff','--t3':'#c4a0ff','--t4':'#a870ff','--t5':'#9b30ff','--t6':'#7a00ff',
+    '--border':'#2d1a3d',
+  },
   slate: {
     '--bg-900':'#0c1320','--bg-800':'#131e2e','--bg-700':'#1a293d','--bg-600':'#22364f','--bg-500':'#2b4464',
     '--accent':'#38bdf8','--accent-fg':'#0c4a6e',
@@ -88,6 +100,8 @@ const THEME_META = [
   { key: 'midnight', label: 'Midnight', preview: ['#070714','#15153d','#818cf8'] },
   { key: 'forest',   label: 'Forest',   preview: ['#030d06','#0c2714','#34d399'] },
   { key: 'rose',     label: 'Rose',     preview: ['#140508','#30101a','#fb7185'] },
+  { key: 'barbie',   label: 'Barbie',   preview: ['#1a0016','#3f003a','#ff2d9b'] },
+  { key: 'gothic',   label: 'Gothic',   preview: ['#080508','#1a141a','#9b30ff'] },
   { key: 'slate',    label: 'Slate',    preview: ['#0c1320','#1a293d','#38bdf8'] },
   { key: 'light',    label: 'Light',    preview: ['#f1f5f9','#ffffff','#16a34a'] },
 ]
@@ -585,3 +599,4 @@ export default function Profil({ session, isAdmin }) {
     </div>
   )
 }
+

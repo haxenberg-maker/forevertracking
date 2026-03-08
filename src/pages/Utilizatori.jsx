@@ -101,15 +101,15 @@ export default function Utilizatori({ session }) {
     setActiveTab('profile')
     setHistory([]) // reset history when switching user
     const { data: targets } = await supabase.from('user_targets').select('*').eq('user_id', u.user_id).single()
-    const cal = targets?.calories || 2000
-    const pg  = targets?.protein_g || 0
-    const fg  = targets?.fat_g || 0
+    const cal = targets?.calories ?? ''
+    const pg  = targets?.protein_g ?? ''
+    const fg  = targets?.fat_g ?? ''
     setEditTargets({
       calories: String(cal),
       protein_g: String(pg),
-      carbs_g: String(targets?.carbs_g || ''),
+      carbs_g: String(targets?.carbs_g ?? ''),
       fat_g: String(fg),
-      water_ml: String(targets?.water_ml || '2000'),
+      water_ml: String(targets?.water_ml ?? ''),
     })
     if (pg && fg && cal) {
       const p = Math.round((pg * 4 / cal) * 100)
@@ -203,7 +203,7 @@ export default function Utilizatori({ session }) {
       protein_g:  Math.round((targetKcal * macroP / 100) / 4),
       carbs_g:    Math.round((targetKcal * macroC / 100) / 4),
       fat_g:      Math.round((targetKcal * macroF / 100) / 9),
-      water_ml:   parseInt(editTargets.water_ml) || 2000,
+      water_ml:   parseInt(editTargets.water_ml) || 0,
     }, { onConflict: 'user_id' })
 
     setSaving(false); setSaved(true)

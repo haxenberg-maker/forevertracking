@@ -802,12 +802,43 @@ export default function Dashboard({ session, isAdmin }) {
   const [todayNutrition, setTodayNutrition] = useState({ calories: 0, protein: 0, carbs: 0, fat: 0 })
   const [caloriesBurned, setCaloriesBurned] = useState(0)
   const [userName, setUserName] = useState('')
+  const [showQuickAdd, setShowQuickAdd] = useState(false)
+  const [quickMealType, setQuickMealType] = useState('breakfast')
+  const [quickFoods, setQuickFoods] = useState([])
+  const [quickSearch, setQuickSearch] = useState('')
+  const [quickSelected, setQuickSelected] = useState(null)
+  const [quickQty, setQuickQty] = useState('100')
+  const [quickPicking, setQuickPicking] = useState(false)
 
   const now = new Date()
   const dateStr = `${dayNames[now.getDay()]}, ${now.getDate()} ${monthNames[now.getMonth()]}`
   const greet = () => { const h = now.getHours(); if (h < 12) return 'Bună dimineața'; if (h < 18) return 'Bună ziua'; return 'Bună seara' }
 
   useEffect(() => { loadData() }, [])
+
+  async function openQuickAdd() {
+    if (!quickFoods.length) {
+      const { data } = await supabase.from('foods').select('id, name, calories, protein, carbs, fat, serving_size, serving_unit').order('name')
+      setQuickFoods(data || [])
+    }
+    setQuickSelected(null); setQuickSearch(''); setQuickQty('100'); setQuickPicking(false)
+    setShowQuickAdd(true)
+  }
+
+  async function saveQuickAdd() {
+    if (!quickSelected) return
+    let mealLog = null
+    const { data: existing } = await supabase.from('meal_logs').select('id').eq('user_id', session.user.id).eq('date', today).eq('meal_type', quickMealType).single()
+    if (existing) { mealLog = existing }
+    else {
+      const { data } = await supabase.from('meal_logs').insert({ user_id: session.user.id, date: today, meal_type: quickMealType }).select().single()
+      mealLog = data
+    }
+    const qg = parseFloat(quickQty) || 100
+    await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: quickSelected.id, quantity_g: qg })
+    setShowQuickAdd(false)
+    loadData()
+  }
 
   async function loadData() {
     const uid = session.user.id
@@ -868,7 +899,7 @@ export default function Dashboard({ session, isAdmin }) {
       <QuoteCard isAdmin={isAdmin} />
 
       {/* Calorie ring */}
-      <div className="card mb-3 cursor-pointer" onClick={() => navigate('/nutritie')}>
+      <div className="card mb-1 cursor-pointer" onClick={() => navigate('/nutritie')}>
         <div className="flex items-center gap-4">
           <ProgressRing value={ringValue} max={targets.calories} size={100} strokeWidth={9} color="#4ade80" showTarget={true} />
           <div className="flex-1 space-y-2.5">
@@ -896,6 +927,76 @@ export default function Dashboard({ session, isAdmin }) {
           </>)}
         </div>
       </div>
+
+      {/* Quick add meal button */}
+      <button onClick={e => { e.stopPropagation(); openQuickAdd() }}
+        className="w-full mb-3 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-brand-green/10 border border-brand-green/20 text-brand-green text-sm font-medium hover:bg-brand-green/20 transition-all">
+        <span className="text-lg leading-none">+</span> Adaugă rapid ce ai mâncat
+      </button>
+
+      {/* Quick Add Modal */}
+      <Modal open={showQuickAdd} onClose={() => setShowQuickAdd(false)} title="Adaugă rapid">
+        {!quickPicking ? (
+          <div className="space-y-3">
+            <div>
+              <p className="text-xs text-slate-400 mb-1.5">Masă</p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {[['breakfast','☀️ Mic dejun'],['lunch','🌤️ Prânz'],['dinner','🌙 Cină'],['snack','🍎 Gustare']].map(([k,l]) => (
+                  <button key={k} onClick={() => setQuickMealType(k)}
+                    className={`py-2.5 rounded-xl text-sm font-medium transition-all ${quickMealType === k ? 'bg-brand-green text-dark-900' : 'bg-dark-700 text-slate-300 hover:bg-dark-600'}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button onClick={() => setQuickPicking(true)}
+              className="w-full bg-dark-700 border border-dark-600 rounded-xl px-3 py-3 text-left text-slate-400 hover:border-brand-green/40 text-sm">
+              🔍 {quickSelected ? <span className="text-white">{quickSelected.name}</span> : 'Caută aliment...'}
+            </button>
+            {quickSelected && (
+              <div className="bg-dark-700 rounded-xl p-3 space-y-2">
+                <p className="text-xs text-slate-400">{quickSelected.calories} kcal · P:{quickSelected.protein}g · C:{quickSelected.carbs}g · G:{quickSelected.fat}g (per 100g)</p>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-400 shrink-0">Cantitate (g)</label>
+                  <input className="input flex-1" type="number" value={quickQty}
+                    onChange={e => setQuickQty(e.target.value)} />
+                  {quickSelected.serving_size && (
+                    <button onClick={() => setQuickQty(String(quickSelected.serving_size))}
+                      className="text-xs bg-brand-blue/20 text-brand-blue px-2 py-1.5 rounded-lg shrink-0">
+                      1 porție
+                    </button>
+                  )}
+                </div>
+                {quickQty && <p className="text-xs text-brand-green font-medium">
+                  ≈ {Math.round(quickSelected.calories * parseFloat(quickQty) / 100)} kcal
+                </p>}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button onClick={() => setShowQuickAdd(false)} className="btn-ghost flex-1 py-3">Anulează</button>
+              <button onClick={saveQuickAdd} disabled={!quickSelected} className="btn-primary flex-1 py-3 disabled:opacity-40">Adaugă</button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <input className="input" autoFocus placeholder="Caută aliment..."
+              value={quickSearch} onChange={e => setQuickSearch(e.target.value)} />
+            <div className="space-y-1.5 max-h-72 overflow-y-auto">
+              {quickFoods.filter(f => f.name.toLowerCase().includes(quickSearch.toLowerCase())).map(f => (
+                <button key={f.id} onClick={() => { setQuickSelected(f); setQuickPicking(false); setQuickSearch('') }}
+                  className="w-full flex justify-between items-center bg-dark-700 rounded-xl px-3 py-2.5 hover:bg-dark-600 text-left">
+                  <span className="text-sm text-white">{f.name}</span>
+                  <span className="text-xs text-slate-400">{f.calories} kcal/100g</span>
+                </button>
+              ))}
+              {quickFoods.filter(f => f.name.toLowerCase().includes(quickSearch.toLowerCase())).length === 0 && (
+                <p className="text-slate-500 text-sm text-center py-4">Niciun aliment găsit.</p>
+              )}
+            </div>
+            <button onClick={() => setQuickPicking(false)} className="btn-ghost w-full">← Înapoi</button>
+          </div>
+        )}
+      </Modal>
 
       {/* Antrenamente viitoare */}
       <UpcomingWorkoutsCard session={session} />

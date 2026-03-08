@@ -56,7 +56,9 @@ function AziTab({ session }) {
   const [editingItem, setEditingItem] = useState(null)
   const [editQty, setEditQty] = useState('')
   const [collapsed, setCollapsed] = useState({})
-  const [takenSupplements, setTakenSupplements] = useState([]) // supplements taken today
+  const [takenSupplements, setTakenSupplements] = useState([])
+  const [showNewFoodForm, setShowNewFoodForm] = useState(false)
+  const [newFoodForm, setNewFoodForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '' })
 
   useEffect(() => { loadAll() }, [])
 
@@ -149,6 +151,28 @@ function AziTab({ session }) {
   function closeAddModal() {
     setShowAddModal(false); setSelectedFood(null); setSelectedTemplate(null)
     setQuantity('100'); setUnit('g'); setMealPct(100); setSearch(''); setPickingFood(false); setPickingTemplate(false); setAddMode('food')
+    setShowNewFoodForm(false); setNewFoodForm({ name: '', calories: '', protein: '', carbs: '', fat: '' })
+  }
+
+  async function saveNewFoodInline() {
+    if (!newFoodForm.name || !newFoodForm.calories) return
+    const { data: food } = await supabase.from('foods').insert({
+      user_id: session.user.id,
+      user_email: session.user.email,
+      name: newFoodForm.name,
+      calories: parseFloat(newFoodForm.calories) || 0,
+      protein: parseFloat(newFoodForm.protein) || 0,
+      carbs: parseFloat(newFoodForm.carbs) || 0,
+      fat: parseFloat(newFoodForm.fat) || 0,
+    }).select().single()
+    if (food) {
+      const newFoods = [...allFoods, food].sort((a,b) => a.name.localeCompare(b.name))
+      setAllFoods(newFoods)
+      setSelectedFood(food)
+      setShowNewFoodForm(false)
+      setPickingFood(false)
+      setSearch('')
+    }
   }
 
   function groupItems(items) {
@@ -442,7 +466,18 @@ function AziTab({ session }) {
               </div>
             )}
             <div className="space-y-1.5 max-h-56 overflow-y-auto">
-              {filteredFoods.length === 0 ? <p className="text-slate-500 text-sm text-center py-4">Niciun aliment găsit.</p>
+              {filteredFoods.length === 0
+                ? (
+                  <div className="text-center py-3 space-y-2">
+                    <p className="text-slate-500 text-sm">Niciun aliment găsit.</p>
+                    {!showNewFoodForm && (
+                      <button onClick={() => { setShowNewFoodForm(true); setNewFoodForm(p => ({ ...p, name: search })) }}
+                        className="btn-primary w-full py-2.5 text-sm">
+                        + Adaugă „{search}" ca aliment nou
+                      </button>
+                    )}
+                  </div>
+                )
                 : filteredFoods.map(f => (
                   <button key={f.id} onClick={() => { setSelectedFood(f); setPickingFood(false); setSearch('') }}
                     className="w-full flex justify-between items-center bg-dark-700 rounded-xl px-3 py-2.5 hover:bg-dark-600 text-left">
@@ -451,7 +486,32 @@ function AziTab({ session }) {
                   </button>
                 ))}
             </div>
-            <button onClick={() => { setPickingFood(false); setSearch('') }} className="btn-ghost w-full">← Înapoi</button>
+
+            {showNewFoodForm && (
+              <div className="bg-dark-700 border border-brand-green/30 rounded-xl p-3 space-y-2">
+                <p className="text-xs font-semibold text-brand-green">✏️ Aliment nou</p>
+                <input className="input" placeholder="Nume *" value={newFoodForm.name}
+                  onChange={e => setNewFoodForm(p => ({ ...p, name: e.target.value }))} />
+                <div className="grid grid-cols-2 gap-2">
+                  {[['calories','kcal /100g *'],['protein','Proteine g'],['carbs','Carbohidrați g'],['fat','Grăsimi g']].map(([k,lbl]) => (
+                    <div key={k}>
+                      <label className="text-[10px] text-slate-500 block mb-0.5">{lbl}</label>
+                      <input className="input" type="number" placeholder="0" value={newFoodForm[k]}
+                        onChange={e => setNewFoodForm(p => ({ ...p, [k]: e.target.value }))} />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => setShowNewFoodForm(false)} className="btn-ghost flex-1 py-2 text-sm">✕</button>
+                  <button onClick={saveNewFoodInline} disabled={!newFoodForm.name || !newFoodForm.calories}
+                    className="btn-primary flex-1 py-2 text-sm disabled:opacity-40">Salvează & selectează</button>
+                </div>
+              </div>
+            )}
+
+            <button onClick={() => { setPickingFood(false); setSearch(''); setShowNewFoodForm(false) }} className="btn-ghost w-full">← Înapoi</button>
+          </div>
+        )}
           </div>
         )}
         {pickingTemplate && (
