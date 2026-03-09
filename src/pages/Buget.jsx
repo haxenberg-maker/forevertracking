@@ -29,16 +29,19 @@ export default function Buget({ session }) {
   const emptyForm = { type: 'expense', amount: '', category: EXPENSE_CATS[0], note: '', date: today }
   const [form, setForm]               = useState(emptyForm)
 
+  const [tableError, setTableError] = useState(false)
+
   useEffect(() => { load() }, [])
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('budget_entries')
       .select('*')
       .eq('user_id', session.user.id)
       .order('date', { ascending: false })
       .order('created_at', { ascending: false })
+    if (error) { setTableError(true); setLoading(false); return }
     setEntries(data || [])
     setLoading(false)
   }
@@ -135,6 +138,16 @@ export default function Buget({ session }) {
         </div>
         <button onClick={openAdd} className="btn-primary px-4 py-2.5 text-sm">+ Adaugă</button>
       </div>
+
+      {tableError && (
+        <div className="card border-brand-orange/30 bg-brand-orange/5 text-center py-8 space-y-3">
+          <p className="text-3xl">⚙️</p>
+          <p className="text-white font-semibold text-sm">Tabelul buget nu există încă</p>
+          <p className="text-slate-400 text-xs">Rulează migrația <code className="text-brand-orange">MIGRATION_buget.sql</code> în Supabase SQL Editor, apoi reîncarcă pagina.</p>
+        </div>
+      )}
+
+      {!tableError && (<>
 
       {/* Tabs */}
       <div className="flex gap-1 bg-dark-700 rounded-xl p-1 mb-4">
@@ -331,6 +344,7 @@ export default function Buget({ session }) {
           </div>
         </div>
       </Modal>
+      </>)}
     </div>
   )
 }
