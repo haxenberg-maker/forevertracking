@@ -887,6 +887,7 @@ function AlimenteTab({ session, isAdmin }) {
   const [form, setForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '', serving_size: '', serving_unit: 'g' })
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [showAlimScanner, setShowAlimScanner] = useState(false)
   const csvRef = useRef()
 
   const SERVING_UNITS = ['g', 'ml', 'bucată', 'lingură', 'linguriță', 'felie', 'porție']
@@ -905,7 +906,7 @@ function AlimenteTab({ session, isAdmin }) {
     setLoading(false)
   }
 
-  function openAdd() { setForm({ name: '', calories: '', protein: '', carbs: '', fat: '', serving_size: '', serving_unit: 'g' }); setEditFood(null); setShowModal(true) }
+  function openAdd() { setForm({ name: '', calories: '', protein: '', carbs: '', fat: '', serving_size: '', serving_unit: 'g', barcode: '' }); setEditFood(null); setShowModal(true) }
   function openEdit(f) {
     setForm({ name: f.name, calories: String(f.calories), protein: String(f.protein), carbs: String(f.carbs), fat: String(f.fat), serving_size: String(f.serving_size || ''), serving_unit: f.serving_unit || 'g' })
     setEditFood(f); setShowModal(true)
@@ -931,6 +932,7 @@ function AlimenteTab({ session, isAdmin }) {
       fat: parseFloat(form.fat) || 0,
       serving_size: parseFloat(form.serving_size) || null,
       serving_unit: form.serving_unit || 'g',
+      barcode: form.barcode || null,
     }
     if (editFood) await supabase.from('foods').update(data).eq('id', editFood.id)
     else await supabase.from('foods').insert(data)
@@ -1001,7 +1003,7 @@ function AlimenteTab({ session, isAdmin }) {
           </div>
         )}
 
-      <Modal open={showModal} onClose={() => setShowModal(false)} title={editFood ? 'Editează aliment' : 'Aliment nou'}>
+      <Modal open={showModal} onClose={() => { setShowModal(false); setShowAlimScanner(false) }} title={editFood ? 'Editează aliment' : 'Aliment nou'}>
         <div className="space-y-3">
           {isAdmin && editFood?.user_email && (
             <div className="bg-dark-700 rounded-xl px-3 py-2 flex items-center gap-2">
@@ -1009,6 +1011,38 @@ function AlimenteTab({ session, isAdmin }) {
               <span className="text-xs text-slate-300">{editFood.user_email}</span>
             </div>
           )}
+
+          {/* Scanner cod de bare — doar la adăugare, nu la editare */}
+          {!editFood && (
+            <div>
+              {!showAlimScanner ? (
+                <button onClick={() => setShowAlimScanner(true)}
+                  className="w-full flex items-center justify-center gap-2 bg-dark-700 border border-dark-600 hover:border-brand-green/50 rounded-xl py-3 text-sm text-slate-300 transition-all">
+                  📷 <span>Completează automat din cod de bare</span>
+                </button>
+              ) : (
+                <div className="bg-dark-800 border border-dark-600 rounded-xl p-3">
+                  <BarcodeScanner
+                    onFound={(foodData) => {
+                      setForm(p => ({
+                        ...p,
+                        name:     foodData.name,
+                        calories: String(foodData.calories),
+                        protein:  String(foodData.protein),
+                        carbs:    String(foodData.carbs),
+                        fat:      String(foodData.fat),
+                        barcode:  foodData.barcode,
+                      }))
+                      setShowAlimScanner(false)
+                    }}
+                    onClose={() => setShowAlimScanner(false)}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {!showAlimScanner && (<>
           {[
             { key: 'name', label: 'Nume aliment', placeholder: 'ex: Piept de pui', type: 'text' },
             { key: 'calories', label: 'Calorii (kcal / 100g)', placeholder: '0', type: 'number' },
@@ -1044,6 +1078,7 @@ function AlimenteTab({ session, isAdmin }) {
           </div>
 
           <button onClick={saveFood} className="btn-primary w-full py-3">{editFood ? 'Salvează' : 'Adaugă'}</button>
+          </>)}
         </div>
       </Modal>
     </div>

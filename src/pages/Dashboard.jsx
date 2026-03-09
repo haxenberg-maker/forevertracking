@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import ProgressRing from '../components/ProgressRing'
 import Modal from '../components/Modal'
 import StreakCard from '../components/StreakCard'
+import BarcodeScanner from '../components/BarcodeScanner'
 
 function getToday() {
   const d = new Date()
@@ -812,6 +813,7 @@ export default function Dashboard({ session, isAdmin }) {
   const [quickPicking, setQuickPicking] = useState(false)
   const [quickNewForm, setQuickNewForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '' })
   const [showQuickNewForm, setShowQuickNewForm] = useState(false)
+  const [showQuickScanner, setShowQuickScanner] = useState(false)
 
   const now = new Date()
   const dateStr = `${dayNames[now.getDay()]}, ${now.getDate()} ${monthNames[now.getMonth()]}`
@@ -1018,8 +1020,48 @@ export default function Dashboard({ session, isAdmin }) {
           </div>
         ) : (
           <div className="space-y-3">
-            <input className="input" autoFocus placeholder="Caută aliment..."
-              value={quickSearch} onChange={e => { setQuickSearch(e.target.value); setShowQuickNewForm(false) }} />
+
+            {/* Scanner activ */}
+            {showQuickScanner && (
+              <div className="bg-dark-800 border border-dark-600 rounded-xl p-3">
+                <BarcodeScanner
+                  onFound={async (foodData) => {
+                    const existing = quickFoods.find(f =>
+                      f.name.toLowerCase() === foodData.name.toLowerCase() ||
+                      f.barcode === foodData.barcode
+                    )
+                    if (existing) {
+                      setQuickSelected(existing); setQuickPicking(false)
+                      setShowQuickScanner(false); setQuickSearch(''); return
+                    }
+                    const { data: saved } = await supabase.from('foods').insert({
+                      user_id: session.user.id, user_email: session.user.email,
+                      name: foodData.name, calories: foodData.calories,
+                      protein: foodData.protein, carbs: foodData.carbs,
+                      fat: foodData.fat, barcode: foodData.barcode,
+                    }).select().single()
+                    if (saved) {
+                      setQuickFoods(prev => [...prev, saved].sort((a,b) => a.name.localeCompare(b.name)))
+                      setQuickSelected(saved)
+                      setQuickPicking(false); setShowQuickScanner(false); setQuickSearch('')
+                    }
+                  }}
+                  onClose={() => setShowQuickScanner(false)}
+                />
+              </div>
+            )}
+
+            {!showQuickScanner && (
+            <div className="flex gap-2">
+              <input className="input flex-1" autoFocus placeholder="Caută aliment..."
+                value={quickSearch} onChange={e => { setQuickSearch(e.target.value); setShowQuickNewForm(false) }} />
+              <button onClick={() => setShowQuickScanner(true)}
+                className="w-11 h-11 flex items-center justify-center rounded-xl bg-dark-700 border border-dark-600 hover:border-brand-green/50 text-xl shrink-0">
+                📷
+              </button>
+            </div>
+            )}
+
             <div className="space-y-1.5 max-h-52 overflow-y-auto">
               {(() => {
                 const results = quickFoods.filter(f => f.name.toLowerCase().includes(quickSearch.toLowerCase()))
@@ -1074,7 +1116,7 @@ export default function Dashboard({ session, isAdmin }) {
               </div>
             )}
 
-            <button onClick={() => { setQuickPicking(false); setShowQuickNewForm(false) }} className="btn-ghost w-full">← Înapoi</button>
+            <button onClick={() => { setQuickPicking(false); setShowQuickNewForm(false); setShowQuickScanner(false) }} className="btn-ghost w-full">← Înapoi</button>
           </div>
         )}
       </Modal>
