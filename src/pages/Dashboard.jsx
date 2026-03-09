@@ -990,10 +990,17 @@ export default function Dashboard({ session, isAdmin }) {
                 ))}
               </div>
             </div>
-            <button onClick={() => setQuickPicking(true)}
-              className="w-full bg-dark-700 border border-dark-600 rounded-xl px-3 py-3 text-left text-slate-400 hover:border-brand-green/40 text-sm">
-              🔍 {quickSelected ? <span className="text-white">{quickSelected.name}</span> : 'Caută aliment...'}
-            </button>
+            <div className="flex gap-2">
+              <button onClick={() => setQuickPicking(true)}
+                className="flex-1 bg-dark-700 border border-dark-600 rounded-xl px-3 py-3 text-left text-slate-400 hover:border-brand-green/40 text-sm">
+                🔍 {quickSelected ? <span className="text-white">{quickSelected.name}</span> : 'Caută aliment...'}
+              </button>
+              <button onClick={() => { setQuickPicking(true); setTimeout(() => setShowQuickScanner(true), 50) }}
+                className="w-11 h-11 flex items-center justify-center rounded-xl bg-dark-700 border border-dark-600 hover:border-brand-green/50 text-xl shrink-0 self-center"
+                title="Scanează cod de bare">
+                📷
+              </button>
+            </div>
             {quickSelected && (
               <div className="bg-dark-700 rounded-xl p-3 space-y-2">
                 <p className="text-xs text-slate-400">{quickSelected.calories} kcal · P:{quickSelected.protein}g · C:{quickSelected.carbs}g · G:{quickSelected.fat}g (per 100g)</p>
