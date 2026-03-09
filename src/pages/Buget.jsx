@@ -34,15 +34,28 @@ export default function Buget({ session }) {
 
   useEffect(() => { load() }, [])
 
+  // Timeout fallback - dacă loading rămâne blocat după 8s, arătăm eroarea
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setLoading(prev => { if (prev) { setTableError(true); return false } return prev })
+    }, 8000)
+    return () => clearTimeout(t)
+  }, [])
+
   async function load() {
     setLoading(true)
-    const { data, error } = await supabase
-      .from('budget_entries')
-      .select('*')
-      .eq('user_id', session.user.id)
-      .order('date', { ascending: false })
-    if (error) { setTableError(true); setLoading(false); return }
-    setEntries(data || [])
+    try {
+      const { data, error } = await supabase
+        .from('budget_entries')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .order('date', { ascending: false })
+      if (error) { console.error('Buget load error:', error); setTableError(true); setLoading(false); return }
+      setEntries(data || [])
+    } catch (err) {
+      console.error('Buget load exception:', err)
+      setTableError(true)
+    }
     setLoading(false)
   }
 
