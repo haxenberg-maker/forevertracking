@@ -1022,6 +1022,17 @@ export default function Dashboard({ session, isAdmin }) {
           <div className="space-y-3">
 
             {/* Scanner activ */}
+            {/* Search + scan — mereu vizibile */}
+            <div className="flex gap-2">
+              <input className="input flex-1" autoFocus placeholder="Caută aliment..."
+                value={quickSearch} onChange={e => { setQuickSearch(e.target.value); setShowQuickNewForm(false); setShowQuickScanner(false) }} />
+              <button onClick={() => setShowQuickScanner(s => !s)}
+                className={`w-11 h-11 flex items-center justify-center rounded-xl border text-xl shrink-0 transition-all ${showQuickScanner ? 'bg-brand-green/20 border-brand-green' : 'bg-dark-700 border-dark-600 hover:border-brand-green/50'}`}
+                title="Scanează cod de bare">
+                📷
+              </button>
+            </div>
+
             {showQuickScanner && (
               <div className="bg-dark-800 border border-dark-600 rounded-xl p-3">
                 <BarcodeScanner
@@ -1049,17 +1060,6 @@ export default function Dashboard({ session, isAdmin }) {
                   onClose={() => setShowQuickScanner(false)}
                 />
               </div>
-            )}
-
-            {!showQuickScanner && (
-            <div className="flex gap-2">
-              <input className="input flex-1" autoFocus placeholder="Caută aliment..."
-                value={quickSearch} onChange={e => { setQuickSearch(e.target.value); setShowQuickNewForm(false) }} />
-              <button onClick={() => setShowQuickScanner(true)}
-                className="w-11 h-11 flex items-center justify-center rounded-xl bg-dark-700 border border-dark-600 hover:border-brand-green/50 text-xl shrink-0">
-                📷
-              </button>
-            </div>
             )}
 
             <div className="space-y-1.5 max-h-52 overflow-y-auto">

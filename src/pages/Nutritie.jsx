@@ -468,7 +468,19 @@ function AziTab({ session }) {
         {pickingFood && (
           <div className="space-y-3">
 
-            {/* Scanner activ */}
+            {/* Search + scan button — mereu vizibile */}
+            <div className="flex gap-2">
+              <input className="input flex-1" autoFocus value={search}
+                onChange={e => { setSearch(e.target.value); setShowScanner(false) }}
+                placeholder="Caută aliment..." />
+              <button onClick={() => setShowScanner(s => !s)}
+                className={`w-11 h-11 flex items-center justify-center rounded-xl border text-xl shrink-0 transition-all ${showScanner ? 'bg-brand-green/20 border-brand-green text-white' : 'bg-dark-700 border-dark-600 hover:border-brand-green/50'}`}
+                title="Scanează cod de bare">
+                📷
+              </button>
+            </div>
+
+            {/* Scanner expandabil */}
             {showScanner && (
               <div className="bg-dark-800 border border-dark-600 rounded-xl p-3">
                 <BarcodeScanner
@@ -500,18 +512,7 @@ function AziTab({ session }) {
               </div>
             )}
 
-            {!showScanner && (
-            <div className="flex gap-2">
-              <input className="input flex-1" autoFocus value={search}
-                onChange={e => setSearch(e.target.value)} placeholder="Caută aliment..." />
-              <button onClick={() => setShowScanner(true)}
-                className="w-11 h-11 flex items-center justify-center rounded-xl bg-dark-700 border border-dark-600 hover:border-brand-green/50 text-xl shrink-0"
-                title="Scanează cod de bare">
-                📷
-              </button>
-            </div>
-            )}
-            {!showScanner && pantrySuggestions.length > 0 && (
+            {pantrySuggestions.length > 0 && (
               <div>
                 <p className="text-xs text-brand-orange font-medium mb-1.5">🧺 Din cămară</p>
                 <div className="space-y-1">
@@ -1012,39 +1013,44 @@ function AlimenteTab({ session, isAdmin }) {
             </div>
           )}
 
-          {/* Scanner cod de bare — doar la adăugare, nu la editare */}
-          {!editFood && (
-            <div>
-              {!showAlimScanner ? (
-                <button onClick={() => setShowAlimScanner(true)}
-                  className="w-full flex items-center justify-center gap-2 bg-dark-700 border border-dark-600 hover:border-brand-green/50 rounded-xl py-3 text-sm text-slate-300 transition-all">
-                  📷 <span>Completează automat din cod de bare</span>
+          {/* Nume + buton scan pe aceeași linie */}
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">Nume aliment</label>
+            <div className="flex gap-2">
+              <input className="input flex-1" type="text" placeholder="ex: Piept de pui"
+                value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
+              {!editFood && (
+                <button onClick={() => setShowAlimScanner(s => !s)}
+                  className={`w-11 h-11 flex items-center justify-center rounded-xl border text-xl shrink-0 transition-all ${showAlimScanner ? 'bg-brand-green/20 border-brand-green' : 'bg-dark-700 border-dark-600 hover:border-brand-green/50'}`}
+                  title="Completează din cod de bare">
+                  📷
                 </button>
-              ) : (
-                <div className="bg-dark-800 border border-dark-600 rounded-xl p-3">
-                  <BarcodeScanner
-                    onFound={(foodData) => {
-                      setForm(p => ({
-                        ...p,
-                        name:     foodData.name,
-                        calories: String(foodData.calories),
-                        protein:  String(foodData.protein),
-                        carbs:    String(foodData.carbs),
-                        fat:      String(foodData.fat),
-                        barcode:  foodData.barcode,
-                      }))
-                      setShowAlimScanner(false)
-                    }}
-                    onClose={() => setShowAlimScanner(false)}
-                  />
-                </div>
               )}
+            </div>
+          </div>
+
+          {showAlimScanner && (
+            <div className="bg-dark-800 border border-dark-600 rounded-xl p-3">
+              <BarcodeScanner
+                onFound={(foodData) => {
+                  setForm(p => ({
+                    ...p,
+                    name:     foodData.name,
+                    calories: String(foodData.calories),
+                    protein:  String(foodData.protein),
+                    carbs:    String(foodData.carbs),
+                    fat:      String(foodData.fat),
+                    barcode:  foodData.barcode,
+                  }))
+                  setShowAlimScanner(false)
+                }}
+                onClose={() => setShowAlimScanner(false)}
+              />
             </div>
           )}
 
           {!showAlimScanner && (<>
           {[
-            { key: 'name', label: 'Nume aliment', placeholder: 'ex: Piept de pui', type: 'text' },
             { key: 'calories', label: 'Calorii (kcal / 100g)', placeholder: '0', type: 'number' },
             { key: 'protein', label: 'Proteine (g / 100g)', placeholder: '0', type: 'number' },
             { key: 'carbs', label: 'Carbohidrați (g / 100g)', placeholder: '0', type: 'number' },
