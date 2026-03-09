@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import ProgressRing from '../components/ProgressRing'
 import Modal from '../components/Modal'
+import StreakCard from '../components/StreakCard'
 
 function getToday() {
   const d = new Date()
@@ -919,11 +920,18 @@ export default function Dashboard({ session, isAdmin }) {
   return (
     <div className="page fade-in">
       {/* Header */}
-      <div className="mb-5">
-        <p className="text-slate-400 text-sm">{dateStr}</p>
-        <h1 className="text-2xl font-bold text-white">
-          {greet()}{userName ? `, ${userName}` : ''} 👋
-        </h1>
+      <div className="mb-5 flex items-start justify-between">
+        <div>
+          <p className="text-slate-400 text-sm">{dateStr}</p>
+          <h1 className="text-2xl font-bold text-white">
+            {greet()}{userName ? `, ${userName}` : ''} 👋
+          </h1>
+        </div>
+        <button onClick={() => navigate('/raport')}
+          className="flex flex-col items-center gap-0.5 bg-dark-700 hover:bg-dark-600 rounded-xl px-3 py-2 transition-all mt-1">
+          <span className="text-base">📊</span>
+          <span className="text-[10px] text-slate-400">Raport</span>
+        </button>
       </div>
 
       {/* Citat */}
@@ -1070,6 +1078,9 @@ export default function Dashboard({ session, isAdmin }) {
           </div>
         )}
       </Modal>
+
+      {/* Streaks */}
+      <StreakCard session={session} />
 
       {/* Antrenamente viitoare */}
       <UpcomingWorkoutsCard session={session} />

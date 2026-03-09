@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import Modal from '../components/Modal'
 import { getCached, setCached, invalidateCache } from '../lib/cache'
+import BarcodeScanner from '../components/BarcodeScanner'
 
 function getToday() {
   const d = new Date()
@@ -59,6 +60,7 @@ function AziTab({ session }) {
   const [collapsed, setCollapsed] = useState({})
   const [takenSupplements, setTakenSupplements] = useState([])
   const [showNewFoodForm, setShowNewFoodForm] = useState(false)
+  const [showScanner, setShowScanner] = useState(false)
   const [newFoodForm, setNewFoodForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '' })
 
   useEffect(() => { loadAll() }, [])
@@ -465,8 +467,51 @@ function AziTab({ session }) {
         )}
         {pickingFood && (
           <div className="space-y-3">
-            <input className="input" autoFocus value={search} onChange={e => setSearch(e.target.value)} placeholder="Caută aliment..." />
-            {pantrySuggestions.length > 0 && (
+
+            {/* Scanner activ */}
+            {showScanner && (
+              <div className="bg-dark-800 border border-dark-600 rounded-xl p-3">
+                <BarcodeScanner
+                  onFound={async (foodData) => {
+                    const existing = allFoods.find(f =>
+                      f.name.toLowerCase() === foodData.name.toLowerCase() ||
+                      f.barcode === foodData.barcode
+                    )
+                    if (existing) {
+                      setSelectedFood(existing); setPickingFood(false)
+                      setShowScanner(false); setSearch('')
+                      return
+                    }
+                    const { data: saved } = await supabase.from('foods').insert({
+                      user_id: session.user.id, user_email: session.user.email,
+                      name: foodData.name, calories: foodData.calories,
+                      protein: foodData.protein, carbs: foodData.carbs,
+                      fat: foodData.fat, barcode: foodData.barcode,
+                    }).select().single()
+                    if (saved) {
+                      invalidateCache('foods')
+                      setAllFoods(prev => [...prev, saved])
+                      setSelectedFood(saved)
+                      setPickingFood(false); setShowScanner(false); setSearch('')
+                    }
+                  }}
+                  onClose={() => setShowScanner(false)}
+                />
+              </div>
+            )}
+
+            {!showScanner && (
+            <div className="flex gap-2">
+              <input className="input flex-1" autoFocus value={search}
+                onChange={e => setSearch(e.target.value)} placeholder="Caută aliment..." />
+              <button onClick={() => setShowScanner(true)}
+                className="w-11 h-11 flex items-center justify-center rounded-xl bg-dark-700 border border-dark-600 hover:border-brand-green/50 text-xl shrink-0"
+                title="Scanează cod de bare">
+                📷
+              </button>
+            </div>
+            )}
+            {!showScanner && pantrySuggestions.length > 0 && (
               <div>
                 <p className="text-xs text-brand-orange font-medium mb-1.5">🧺 Din cămară</p>
                 <div className="space-y-1">
@@ -540,7 +585,7 @@ function AziTab({ session }) {
               </div>
             )}
 
-            <button onClick={() => { setPickingFood(false); setSearch(''); setShowNewFoodForm(false) }} className="btn-ghost w-full">← Înapoi</button>
+            <button onClick={() => { setPickingFood(false); setSearch(''); setShowNewFoodForm(false); setShowScanner(false) }} className="btn-ghost w-full">← Înapoi</button>
           </div>
         )}
         {pickingTemplate && (
