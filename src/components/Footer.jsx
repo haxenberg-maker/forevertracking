@@ -5,6 +5,7 @@ const baseTabs = [
   { path: '/nutritie', label: 'Nutriție', icon: '🥗' },
   { path: '/sport',    label: 'Plan',     icon: '📋' },
   { path: '/camara',   label: 'Cămară',  icon: '🧺' },
+  { path: '/buget',    label: 'Buget',   icon: '💰' },
   { path: '/profil',   label: 'Profil',  icon: '👤' },
 ]
 
