@@ -61,6 +61,7 @@ export default function Raport({ session }) {
       { data: waterLogs },
       { data: workouts },
       { data: runs },
+      { data: scheduleDone },
     ] = await Promise.all([
       supabase.from('meal_logs')
         .select('date, meal_items(quantity_g, foods(calories, protein, carbs, fat))')
@@ -74,6 +75,11 @@ export default function Raport({ session }) {
       supabase.from('running_logs')
         .select('date, distance_km, duration_min')
         .eq('user_id', uid).gte('date', start).lte('date', end),
+      // Antrenamentele zilnice/săptămânale bifate
+      supabase.from('workout_schedule_logs')
+        .select('date, schedule_id')
+        .eq('user_id', uid).eq('done', true)
+        .gte('date', start).lte('date', end),
     ])
 
     // Group by date
@@ -96,6 +102,12 @@ export default function Raport({ session }) {
     })
 
     ;(workouts || []).forEach(w => {
+      addDate(w.date); byDate[w.date].workouts += 1
+    })
+
+    // Adaugă și antrenamentele bifate din program (zilnic/săptămânal)
+    // Evităm dubluri: dacă aceeași zi are și workout_log și schedule_log, numărăm separat
+    ;(scheduleDone || []).forEach(w => {
       addDate(w.date); byDate[w.date].workouts += 1
     })
 

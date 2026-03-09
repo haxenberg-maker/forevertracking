@@ -21,15 +21,20 @@ export default function StreakCard({ session }) {
     since.setDate(since.getDate() - 60)
     const sinceStr = since.toISOString().split('T')[0]
 
-    const [{ data: meals }, { data: water }, { data: workouts }] = await Promise.all([
+    const [{ data: meals }, { data: water }, { data: workouts }, { data: schedDone }] = await Promise.all([
       supabase.from('meal_logs').select('date').eq('user_id', uid).gte('date', sinceStr),
       supabase.from('water_logs').select('date').eq('user_id', uid).gte('date', sinceStr),
       supabase.from('workout_logs').select('date').eq('user_id', uid).gte('date', sinceStr),
+      supabase.from('workout_schedule_logs').select('date').eq('user_id', uid).eq('done', true).gte('date', sinceStr),
     ])
 
     const mealDates    = new Set((meals    || []).map(r => r.date))
     const waterDates   = new Set((water    || []).map(r => r.date))
-    const workoutDates = new Set((workouts || []).map(r => r.date))
+    // Combinăm workout_logs + schedule_logs bifate
+    const workoutDates = new Set([
+      ...(workouts  || []).map(r => r.date),
+      ...(schedDone || []).map(r => r.date),
+    ])
 
     setStreaks({
       meals:    calcStreak(mealDates),
