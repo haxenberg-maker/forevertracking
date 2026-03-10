@@ -205,6 +205,20 @@ export default function Profil({ session, isAdmin }) {
   const [saved, setSaved] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
   const [activeTheme, setActiveTheme] = useState(() => localStorage.getItem('app_theme') || 'dark')
+  const [navPrefs, setNavPrefs] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('nav_prefs') || '{}') } catch { return {} }
+  })
+
+  function toggleNavPref(key) {
+    setNavPrefs(prev => {
+      // Default-ul e true (vizibil) — toggle înseamnă setare explicită
+      const current = prev[key] !== false // dacă nu e setat explicit false, e true
+      const next = { ...prev, [key]: !current }
+      localStorage.setItem('nav_prefs', JSON.stringify(next))
+      window.dispatchEvent(new Event('nav-prefs-changed'))
+      return next
+    })
+  }
 
   useEffect(() => { loadData(); applyTheme(activeTheme) }, [])
 
@@ -453,6 +467,34 @@ export default function Profil({ session, isAdmin }) {
                 {activeTheme === t.key && <span className="text-brand-green text-[9px] leading-none">✓ activ</span>}
               </button>
             ))}
+          </div>
+        </div>
+
+        {/* Install */}
+        <div className="border-t border-dark-600 pt-3">
+          <p className="text-sm font-medium text-white mb-3">🧭 Pagini vizibile în meniu</p>
+          <div className="space-y-2">
+            {[
+              { key: 'showBuget',  label: 'Buget',  icon: '💰', desc: 'Urmărire venituri & cheltuieli' },
+              { key: 'showCamara', label: 'Cămară', icon: '🧺', desc: 'Stoc alimente acasă' },
+            ].map(item => {
+              const isOn = navPrefs[item.key] !== false
+              return (
+                <button key={item.key} onClick={() => toggleNavPref(item.key)}
+                  className="w-full flex items-center justify-between bg-dark-700 rounded-xl px-4 py-3 hover:bg-dark-600 transition-all">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xl">{item.icon}</span>
+                    <div className="text-left">
+                      <p className="text-sm text-white font-medium">{item.label}</p>
+                      <p className="text-[11px] text-slate-500">{item.desc}</p>
+                    </div>
+                  </div>
+                  <div className={`w-11 h-6 rounded-full transition-all relative ${isOn ? 'bg-brand-green' : 'bg-dark-500'}`}>
+                    <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${isOn ? 'left-5' : 'left-0.5'}`} />
+                  </div>
+                </button>
+              )
+            })}
           </div>
         </div>
 

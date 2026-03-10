@@ -11,6 +11,8 @@ const Profil         = lazy(() => import('./pages/Profil'))
 const StravaCallback = lazy(() => import('./pages/StravaCallback'))
 const Camara         = lazy(() => import('./pages/Camara'))
 const Utilizatori    = lazy(() => import('./pages/Utilizatori'))
+const Buget          = lazy(() => import('./pages/Buget'))
+const Raport         = lazy(() => import('./pages/Raport'))
 
 function PageLoader() {
   return (
@@ -102,6 +104,8 @@ export default function App() {
             <Route path="/sport" element={<><Sport session={session} isAdmin={isAdmin} accountType={accountType} /><Footer isAdmin={isAdmin} /></>} />
             <Route path="/camara" element={<><Camara session={session} /><Footer isAdmin={isAdmin} /></>} />
             <Route path="/profil" element={<><Profil session={session} isAdmin={isAdmin} /><Footer isAdmin={isAdmin} /></>} />
+            <Route path="/buget" element={<><Buget session={session} /><Footer isAdmin={isAdmin} /></>} />
+            <Route path="/raport" element={<><Raport session={session} /><Footer isAdmin={isAdmin} /></>} />
             {isAdmin && <Route path="/utilizatori" element={<><Utilizatori session={session} /><Footer isAdmin={isAdmin} /></>} />}
           </Routes>
         </Suspense>

@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import ProgressRing from '../components/ProgressRing'
 import Modal from '../components/Modal'
+import StreakCard from '../components/StreakCard'
+import BarcodeScanner from '../components/BarcodeScanner'
 
 function getToday() {
   const d = new Date()
@@ -811,6 +813,7 @@ export default function Dashboard({ session, isAdmin }) {
   const [quickPicking, setQuickPicking] = useState(false)
   const [quickNewForm, setQuickNewForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '' })
   const [showQuickNewForm, setShowQuickNewForm] = useState(false)
+  const [showQuickScanner, setShowQuickScanner] = useState(false)
 
   const now = new Date()
   const dateStr = `${dayNames[now.getDay()]}, ${now.getDate()} ${monthNames[now.getMonth()]}`
@@ -919,11 +922,18 @@ export default function Dashboard({ session, isAdmin }) {
   return (
     <div className="page fade-in">
       {/* Header */}
-      <div className="mb-5">
-        <p className="text-slate-400 text-sm">{dateStr}</p>
-        <h1 className="text-2xl font-bold text-white">
-          {greet()}{userName ? `, ${userName}` : ''} 👋
-        </h1>
+      <div className="mb-5 flex items-start justify-between">
+        <div>
+          <p className="text-slate-400 text-sm">{dateStr}</p>
+          <h1 className="text-2xl font-bold text-white">
+            {greet()}{userName ? `, ${userName}` : ''} 👋
+          </h1>
+        </div>
+        <button onClick={() => navigate('/raport')}
+          className="flex flex-col items-center gap-0.5 bg-dark-700 hover:bg-dark-600 rounded-xl px-3 py-2 transition-all mt-1">
+          <span className="text-base">📊</span>
+          <span className="text-[10px] text-slate-400">Raport</span>
+        </button>
       </div>
 
       {/* Citat */}
@@ -980,10 +990,17 @@ export default function Dashboard({ session, isAdmin }) {
                 ))}
               </div>
             </div>
-            <button onClick={() => setQuickPicking(true)}
-              className="w-full bg-dark-700 border border-dark-600 rounded-xl px-3 py-3 text-left text-slate-400 hover:border-brand-green/40 text-sm">
-              🔍 {quickSelected ? <span className="text-white">{quickSelected.name}</span> : 'Caută aliment...'}
-            </button>
+            <div className="flex gap-2">
+              <button onClick={() => setQuickPicking(true)}
+                className="flex-1 bg-dark-700 border border-dark-600 rounded-xl px-3 py-3 text-left text-slate-400 hover:border-brand-green/40 text-sm">
+                🔍 {quickSelected ? <span className="text-white">{quickSelected.name}</span> : 'Caută aliment...'}
+              </button>
+              <button onClick={() => { setQuickPicking(true); setTimeout(() => setShowQuickScanner(true), 50) }}
+                className="w-11 h-11 flex items-center justify-center rounded-xl bg-dark-700 border border-dark-600 hover:border-brand-green/50 text-xl shrink-0 self-center"
+                title="Scanează cod de bare">
+                📷
+              </button>
+            </div>
             {quickSelected && (
               <div className="bg-dark-700 rounded-xl p-3 space-y-2">
                 <p className="text-xs text-slate-400">{quickSelected.calories} kcal · P:{quickSelected.protein}g · C:{quickSelected.carbs}g · G:{quickSelected.fat}g (per 100g)</p>
@@ -1010,8 +1027,48 @@ export default function Dashboard({ session, isAdmin }) {
           </div>
         ) : (
           <div className="space-y-3">
-            <input className="input" autoFocus placeholder="Caută aliment..."
-              value={quickSearch} onChange={e => { setQuickSearch(e.target.value); setShowQuickNewForm(false) }} />
+
+            {/* Scanner activ */}
+            {/* Search + scan — mereu vizibile */}
+            <div className="flex gap-2">
+              <input className="input flex-1" autoFocus placeholder="Caută aliment..."
+                value={quickSearch} onChange={e => { setQuickSearch(e.target.value); setShowQuickNewForm(false); setShowQuickScanner(false) }} />
+              <button onClick={() => setShowQuickScanner(s => !s)}
+                className={`w-11 h-11 flex items-center justify-center rounded-xl border text-xl shrink-0 transition-all ${showQuickScanner ? 'bg-brand-green/20 border-brand-green' : 'bg-dark-700 border-dark-600 hover:border-brand-green/50'}`}
+                title="Scanează cod de bare">
+                📷
+              </button>
+            </div>
+
+            {showQuickScanner && (
+              <div className="bg-dark-800 border border-dark-600 rounded-xl p-3">
+                <BarcodeScanner
+                  onFound={async (foodData) => {
+                    const existing = quickFoods.find(f =>
+                      f.name.toLowerCase() === foodData.name.toLowerCase() ||
+                      f.barcode === foodData.barcode
+                    )
+                    if (existing) {
+                      setQuickSelected(existing); setQuickPicking(false)
+                      setShowQuickScanner(false); setQuickSearch(''); return
+                    }
+                    const { data: saved } = await supabase.from('foods').insert({
+                      user_id: session.user.id, user_email: session.user.email,
+                      name: foodData.name, calories: foodData.calories,
+                      protein: foodData.protein, carbs: foodData.carbs,
+                      fat: foodData.fat, barcode: foodData.barcode,
+                    }).select().single()
+                    if (saved) {
+                      setQuickFoods(prev => [...prev, saved].sort((a,b) => a.name.localeCompare(b.name)))
+                      setQuickSelected(saved)
+                      setQuickPicking(false); setShowQuickScanner(false); setQuickSearch('')
+                    }
+                  }}
+                  onClose={() => setShowQuickScanner(false)}
+                />
+              </div>
+            )}
+
             <div className="space-y-1.5 max-h-52 overflow-y-auto">
               {(() => {
                 const results = quickFoods.filter(f => f.name.toLowerCase().includes(quickSearch.toLowerCase()))
@@ -1066,10 +1123,13 @@ export default function Dashboard({ session, isAdmin }) {
               </div>
             )}
 
-            <button onClick={() => { setQuickPicking(false); setShowQuickNewForm(false) }} className="btn-ghost w-full">← Înapoi</button>
+            <button onClick={() => { setQuickPicking(false); setShowQuickNewForm(false); setShowQuickScanner(false) }} className="btn-ghost w-full">← Înapoi</button>
           </div>
         )}
       </Modal>
+
+      {/* Streaks */}
+      <StreakCard session={session} />
 
       {/* Antrenamente viitoare */}
       <UpcomingWorkoutsCard session={session} />

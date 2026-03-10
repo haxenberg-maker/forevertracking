@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import Modal from '../components/Modal'
 import { getCached, setCached, invalidateCache } from '../lib/cache'
+import BarcodeScanner from '../components/BarcodeScanner'
 
 function getToday() {
   const d = new Date()
@@ -59,6 +60,7 @@ function AziTab({ session }) {
   const [collapsed, setCollapsed] = useState({})
   const [takenSupplements, setTakenSupplements] = useState([])
   const [showNewFoodForm, setShowNewFoodForm] = useState(false)
+  const [showScanner, setShowScanner] = useState(false)
   const [newFoodForm, setNewFoodForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '' })
 
   useEffect(() => { loadAll() }, [])
@@ -465,7 +467,51 @@ function AziTab({ session }) {
         )}
         {pickingFood && (
           <div className="space-y-3">
-            <input className="input" autoFocus value={search} onChange={e => setSearch(e.target.value)} placeholder="Caută aliment..." />
+
+            {/* Search + scan button — mereu vizibile */}
+            <div className="flex gap-2">
+              <input className="input flex-1" autoFocus value={search}
+                onChange={e => { setSearch(e.target.value); setShowScanner(false) }}
+                placeholder="Caută aliment..." />
+              <button onClick={() => setShowScanner(s => !s)}
+                className={`w-11 h-11 flex items-center justify-center rounded-xl border text-xl shrink-0 transition-all ${showScanner ? 'bg-brand-green/20 border-brand-green text-white' : 'bg-dark-700 border-dark-600 hover:border-brand-green/50'}`}
+                title="Scanează cod de bare">
+                📷
+              </button>
+            </div>
+
+            {/* Scanner expandabil */}
+            {showScanner && (
+              <div className="bg-dark-800 border border-dark-600 rounded-xl p-3">
+                <BarcodeScanner
+                  onFound={async (foodData) => {
+                    const existing = allFoods.find(f =>
+                      f.name.toLowerCase() === foodData.name.toLowerCase() ||
+                      f.barcode === foodData.barcode
+                    )
+                    if (existing) {
+                      setSelectedFood(existing); setPickingFood(false)
+                      setShowScanner(false); setSearch('')
+                      return
+                    }
+                    const { data: saved } = await supabase.from('foods').insert({
+                      user_id: session.user.id, user_email: session.user.email,
+                      name: foodData.name, calories: foodData.calories,
+                      protein: foodData.protein, carbs: foodData.carbs,
+                      fat: foodData.fat, barcode: foodData.barcode,
+                    }).select().single()
+                    if (saved) {
+                      invalidateCache('foods')
+                      setAllFoods(prev => [...prev, saved])
+                      setSelectedFood(saved)
+                      setPickingFood(false); setShowScanner(false); setSearch('')
+                    }
+                  }}
+                  onClose={() => setShowScanner(false)}
+                />
+              </div>
+            )}
+
             {pantrySuggestions.length > 0 && (
               <div>
                 <p className="text-xs text-brand-orange font-medium mb-1.5">🧺 Din cămară</p>
@@ -540,7 +586,7 @@ function AziTab({ session }) {
               </div>
             )}
 
-            <button onClick={() => { setPickingFood(false); setSearch(''); setShowNewFoodForm(false) }} className="btn-ghost w-full">← Înapoi</button>
+            <button onClick={() => { setPickingFood(false); setSearch(''); setShowNewFoodForm(false); setShowScanner(false) }} className="btn-ghost w-full">← Înapoi</button>
           </div>
         )}
         {pickingTemplate && (
@@ -842,6 +888,7 @@ function AlimenteTab({ session, isAdmin }) {
   const [form, setForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '', serving_size: '', serving_unit: 'g' })
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [showAlimScanner, setShowAlimScanner] = useState(false)
   const csvRef = useRef()
 
   const SERVING_UNITS = ['g', 'ml', 'bucată', 'lingură', 'linguriță', 'felie', 'porție']
@@ -860,7 +907,7 @@ function AlimenteTab({ session, isAdmin }) {
     setLoading(false)
   }
 
-  function openAdd() { setForm({ name: '', calories: '', protein: '', carbs: '', fat: '', serving_size: '', serving_unit: 'g' }); setEditFood(null); setShowModal(true) }
+  function openAdd() { setForm({ name: '', calories: '', protein: '', carbs: '', fat: '', serving_size: '', serving_unit: 'g', barcode: '' }); setEditFood(null); setShowModal(true) }
   function openEdit(f) {
     setForm({ name: f.name, calories: String(f.calories), protein: String(f.protein), carbs: String(f.carbs), fat: String(f.fat), serving_size: String(f.serving_size || ''), serving_unit: f.serving_unit || 'g' })
     setEditFood(f); setShowModal(true)
@@ -886,6 +933,7 @@ function AlimenteTab({ session, isAdmin }) {
       fat: parseFloat(form.fat) || 0,
       serving_size: parseFloat(form.serving_size) || null,
       serving_unit: form.serving_unit || 'g',
+      barcode: form.barcode || null,
     }
     if (editFood) await supabase.from('foods').update(data).eq('id', editFood.id)
     else await supabase.from('foods').insert(data)
@@ -956,7 +1004,7 @@ function AlimenteTab({ session, isAdmin }) {
           </div>
         )}
 
-      <Modal open={showModal} onClose={() => setShowModal(false)} title={editFood ? 'Editează aliment' : 'Aliment nou'}>
+      <Modal open={showModal} onClose={() => { setShowModal(false); setShowAlimScanner(false) }} title={editFood ? 'Editează aliment' : 'Aliment nou'}>
         <div className="space-y-3">
           {isAdmin && editFood?.user_email && (
             <div className="bg-dark-700 rounded-xl px-3 py-2 flex items-center gap-2">
@@ -964,8 +1012,45 @@ function AlimenteTab({ session, isAdmin }) {
               <span className="text-xs text-slate-300">{editFood.user_email}</span>
             </div>
           )}
+
+          {/* Nume + buton scan pe aceeași linie */}
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">Nume aliment</label>
+            <div className="flex gap-2">
+              <input className="input flex-1" type="text" placeholder="ex: Piept de pui"
+                value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
+              {!editFood && (
+                <button onClick={() => setShowAlimScanner(s => !s)}
+                  className={`w-11 h-11 flex items-center justify-center rounded-xl border text-xl shrink-0 transition-all ${showAlimScanner ? 'bg-brand-green/20 border-brand-green' : 'bg-dark-700 border-dark-600 hover:border-brand-green/50'}`}
+                  title="Completează din cod de bare">
+                  📷
+                </button>
+              )}
+            </div>
+          </div>
+
+          {showAlimScanner && (
+            <div className="bg-dark-800 border border-dark-600 rounded-xl p-3">
+              <BarcodeScanner
+                onFound={(foodData) => {
+                  setForm(p => ({
+                    ...p,
+                    name:     foodData.name,
+                    calories: String(foodData.calories),
+                    protein:  String(foodData.protein),
+                    carbs:    String(foodData.carbs),
+                    fat:      String(foodData.fat),
+                    barcode:  foodData.barcode,
+                  }))
+                  setShowAlimScanner(false)
+                }}
+                onClose={() => setShowAlimScanner(false)}
+              />
+            </div>
+          )}
+
+          {!showAlimScanner && (<>
           {[
-            { key: 'name', label: 'Nume aliment', placeholder: 'ex: Piept de pui', type: 'text' },
             { key: 'calories', label: 'Calorii (kcal / 100g)', placeholder: '0', type: 'number' },
             { key: 'protein', label: 'Proteine (g / 100g)', placeholder: '0', type: 'number' },
             { key: 'carbs', label: 'Carbohidrați (g / 100g)', placeholder: '0', type: 'number' },
@@ -999,6 +1084,7 @@ function AlimenteTab({ session, isAdmin }) {
           </div>
 
           <button onClick={saveFood} className="btn-primary w-full py-3">{editFood ? 'Salvează' : 'Adaugă'}</button>
+          </>)}
         </div>
       </Modal>
     </div>
