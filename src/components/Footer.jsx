@@ -1,21 +1,34 @@
 import { useLocation, useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
 
-const baseTabs = [
-  { path: '/',         label: 'Acasă',   icon: '🏠' },
-  { path: '/nutritie', label: 'Nutriție', icon: '🥗' },
-  { path: '/sport',    label: 'Plan',     icon: '📋' },
-  { path: '/camara',   label: 'Cămară',  icon: '🧺' },
-  { path: '/buget',    label: 'Buget',   icon: '💰' },
-  { path: '/profil',   label: 'Profil',  icon: '👤' },
+const allTabs = [
+  { path: '/',         label: 'Acasă',   icon: '🏠',  pref: null },
+  { path: '/nutritie', label: 'Nutriție', icon: '🥗',  pref: null },
+  { path: '/sport',    label: 'Plan',     icon: '📋',  pref: null },
+  { path: '/camara',   label: 'Cămară',  icon: '🧺',  pref: 'showCamara' },
+  { path: '/buget',    label: 'Buget',   icon: '💰',  pref: 'showBuget' },
+  { path: '/profil',   label: 'Profil',  icon: '👤',  pref: null },
 ]
 
-const adminTab = { path: '/utilizatori', label: 'Elevi', icon: '👥' }
+const adminTab = { path: '/utilizatori', label: 'Elevi', icon: '👥', pref: null }
+
+function getNavPrefs() {
+  try { return JSON.parse(localStorage.getItem('nav_prefs') || '{}') } catch { return {} }
+}
 
 export default function Footer({ isAdmin }) {
   const location = useLocation()
   const navigate = useNavigate()
+  const [prefs, setPrefs] = useState(getNavPrefs)
 
-  const tabs = isAdmin ? [...baseTabs, adminTab] : baseTabs
+  useEffect(() => {
+    const handler = () => setPrefs(getNavPrefs())
+    window.addEventListener('nav-prefs-changed', handler)
+    return () => window.removeEventListener('nav-prefs-changed', handler)
+  }, [])
+
+  const visibleTabs = allTabs.filter(t => t.pref === null || prefs[t.pref] !== false)
+  const tabs = isAdmin ? [...visibleTabs, adminTab] : visibleTabs
   const many = tabs.length >= 6
 
   return (
