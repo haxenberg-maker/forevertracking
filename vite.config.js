@@ -1,51 +1,34 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import legacy from '@vitejs/plugin-legacy'
 
 export default defineConfig({
   plugins: [
     react(),
+    legacy({
+      // Generează cod compatibil cu Safari iOS 14+
+      targets: ['ios >= 14', 'safari >= 14'],
+    }),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icons/*.png'],
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
       manifest: {
-        name: 'FitTracker',
-        short_name: 'FitTracker',
-        description: 'Urmărire nutriție, calorii și antrenamente',
+        name: 'Fitness Tracker',
+        short_name: 'Fitness',
         theme_color: '#0f0f13',
         background_color: '#0f0f13',
         display: 'standalone',
         orientation: 'portrait',
-        scope: '/',
-        start_url: '/',
         icons: [
-          { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' }
-        ]
+          { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+        ],
       },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/.*supabase\.co\/.*/i,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'supabase-cache',
-              expiration: { maxEntries: 50, maxAgeSeconds: 300 },
-            }
-          }
-        ]
-      }
-    })
+    }),
   ],
   build: {
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-supabase': ['@supabase/supabase-js'],
-        }
-      }
-    }
-  }
+    target: ['es2015', 'safari14'],
+  },
 })
