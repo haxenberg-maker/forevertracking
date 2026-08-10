@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { getCached, setCached, invalidateCache } from '../lib/cache'
+import { useSubmitGuard } from '../lib/useSubmitGuard'
 import ProgressRing from '../components/ProgressRing'
 import Modal from '../components/Modal'
 import StreakCard from '../components/StreakCard'
@@ -182,8 +183,8 @@ function ShoppingListCard({ session }) {
             ))}
           </div>
           <div className="flex gap-2">
-            <button onClick={() => moveToStock(selectedItem).then(() => setShowAddFood(false))}
-              className="btn-ghost flex-1 py-3 text-sm">Sări peste</button>
+            <button onClick={() => { setSaving(true); moveToStock(selectedItem).then(() => { setShowAddFood(false); setSaving(false) }) }}
+              disabled={saving} className="btn-ghost flex-1 py-3 text-sm disabled:opacity-50">Sări peste</button>
             <button onClick={saveAndMove} disabled={saving || !foodForm.calories}
               className="btn-primary flex-1 py-3 disabled:opacity-50">
               {saving ? 'Se salvează...' : '📦 Mută în stoc'}
@@ -313,6 +314,7 @@ function SupplementsCard({ session, onToggle }) {
   const [form, setForm] = useState({ name: '', amount_g: '', unit: 'g', calories: '', protein_g: '', carbs_g: '', fat_g: '' })
   const [editItem, setEditItem] = useState(null)
   const [showMacros, setShowMacros] = useState(false)
+  const [savingSup, saveGuard] = useSubmitGuard()
   const UNITS = ['g', 'mg', 'ml', 'capsule', 'tabletă', 'linguriță']
 
   useEffect(() => { loadAll() }, [])
@@ -445,7 +447,7 @@ function SupplementsCard({ session, onToggle }) {
           )}
           <div className="flex gap-2">
             <button onClick={() => { setShowAddForm(false); setEditItem(null); setShowMacros(false) }} className="btn-ghost flex-1 py-3">← Înapoi</button>
-            <button onClick={saveSupplement} className="btn-primary flex-1 py-3">{editItem ? 'Salvează' : 'Adaugă'}</button>
+            <button onClick={() => saveGuard(saveSupplement)} disabled={savingSup} className="btn-primary flex-1 py-3 disabled:opacity-50">{savingSup ? 'Se salvează...' : (editItem ? 'Salvează' : 'Adaugă')}</button>
           </div>
         </div>
       )}
@@ -769,6 +771,7 @@ function QuoteCard({ isAdmin }) {
   const [quote, setQuote] = useState('')
   const [editing, setEditing] = useState(false)
   const [input, setInput] = useState('')
+  const [savingQuote, quoteGuard] = useSubmitGuard()
 
   useEffect(() => { load() }, [])
 
@@ -792,7 +795,7 @@ function QuoteCard({ isAdmin }) {
             value={input} onChange={e => setInput(e.target.value)} autoFocus />
           <div className="flex gap-2">
             <button onClick={() => setEditing(false)} className="btn-ghost flex-1 py-2 text-xs">Anulează</button>
-            <button onClick={save} className="btn-primary flex-1 py-2 text-xs">Salvează</button>
+            <button onClick={() => quoteGuard(save)} disabled={savingQuote} className="btn-primary flex-1 py-2 text-xs disabled:opacity-50">{savingQuote ? '...' : 'Salvează'}</button>
           </div>
         </div>
       ) : quote ? (
@@ -832,6 +835,8 @@ export default function Dashboard({ session, isAdmin }) {
   const [quickNewForm, setQuickNewForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '' })
   const [showQuickNewForm, setShowQuickNewForm] = useState(false)
   const [showQuickScanner, setShowQuickScanner] = useState(false)
+  const [savingQuickAdd, quickAddGuard] = useSubmitGuard()
+  const [savingNewFood, newFoodGuard] = useSubmitGuard()
 
   const now = new Date()
   const dateStr = `${dayNames[now.getDay()]}, ${now.getDate()} ${monthNames[now.getMonth()]}`
@@ -1055,7 +1060,7 @@ export default function Dashboard({ session, isAdmin }) {
             )}
             <div className="flex gap-2">
               <button onClick={() => setShowQuickAdd(false)} className="btn-ghost flex-1 py-3">Anulează</button>
-              <button onClick={saveQuickAdd} disabled={!quickSelected} className="btn-primary flex-1 py-3 disabled:opacity-40">Adaugă</button>
+              <button onClick={() => quickAddGuard(saveQuickAdd)} disabled={!quickSelected || savingQuickAdd} className="btn-primary flex-1 py-3 disabled:opacity-40">{savingQuickAdd ? 'Se adaugă...' : 'Adaugă'}</button>
             </div>
           </div>
         ) : (
@@ -1151,8 +1156,8 @@ export default function Dashboard({ session, isAdmin }) {
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => setShowQuickNewForm(false)} className="btn-ghost flex-1 py-2 text-sm">✕</button>
-                  <button onClick={saveQuickNewFood} disabled={!quickNewForm.name || !quickNewForm.calories}
-                    className="btn-primary flex-1 py-2 text-sm disabled:opacity-40">Salvează & selectează</button>
+                  <button onClick={() => newFoodGuard(saveQuickNewFood)} disabled={!quickNewForm.name || !quickNewForm.calories || savingNewFood}
+                    className="btn-primary flex-1 py-2 text-sm disabled:opacity-40">{savingNewFood ? 'Se salvează...' : 'Salvează & selectează'}</button>
                 </div>
               </div>
             )}

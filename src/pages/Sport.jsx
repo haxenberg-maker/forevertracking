@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useSubmitGuard } from '../lib/useSubmitGuard'
 import Modal from '../components/Modal'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from 'recharts'
 
@@ -93,6 +94,7 @@ function AlergareTab({ session }) {
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({ date: today, distance_km: '', duration_min: '', notes: '', start_time: '' })
   const [loading, setLoading] = useState(true)
+  const [savingRun, runGuard] = useSubmitGuard()
   const { syncing, syncMsg, stravaConnected, syncStrava } = useStravaSync(session, loadRuns)
 
   useEffect(() => { loadRuns() }, [])
@@ -225,7 +227,7 @@ function AlergareTab({ session }) {
                 value={form[f.key]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
             </div>
           ))}
-          <button onClick={saveRun} className="btn-primary w-full py-3">Salvează alergarea</button>
+          <button onClick={() => runGuard(saveRun)} disabled={savingRun} className="btn-primary w-full py-3 disabled:opacity-50">{savingRun ? 'Se salvează...' : 'Salvează alergarea'}</button>
         </div>
       </Modal>
     </div>
@@ -242,6 +244,7 @@ function FortaTab({ session, isAdmin }) {
   const [exercises, setExercises] = useState([{ exercise_name: '', sets: '3', reps: '10', weight_kg: '0' }])
   const [loading, setLoading] = useState(true)
   const [students, setStudents] = useState([])
+  const [savingWorkout, workoutGuard] = useSubmitGuard()
   const { syncing, syncMsg, stravaConnected, syncStrava } = useStravaSync(session, loadWorkouts)
 
   useEffect(() => { loadWorkouts() }, [])
@@ -449,7 +452,7 @@ function FortaTab({ session, isAdmin }) {
             <input className="input" placeholder="Opțional..." value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
           </div>
 
-          <button onClick={saveWorkout} className="btn-primary w-full py-3">Salvează antrenamentul</button>
+          <button onClick={() => workoutGuard(saveWorkout)} disabled={savingWorkout} className="btn-primary w-full py-3 disabled:opacity-50">{savingWorkout ? 'Se salvează...' : 'Salvează antrenamentul'}</button>
         </div>
       </Modal>
     </div>
@@ -1025,8 +1028,7 @@ function BicicletaTab({ session }) {
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({ date: today, distance_km: '', duration_min: '', type: 'road', notes: '' })
   const [loading, setLoading] = useState(false)
-
-  const BIKE_TYPES = [
+  const [savingRide, rideGuard] = useSubmitGuard()
     { key: 'road', label: '🚴 Șosea' },
     { key: 'mtb', label: '🏔 MTB' },
     { key: 'indoor', label: '🏠 Indoor / Spinning' },
@@ -1138,7 +1140,7 @@ function BicicletaTab({ session }) {
             <label className="text-xs text-slate-400 block mb-1">Notițe</label>
             <input className="input" placeholder="ex: Munte, vânt puternic..." value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
           </div>
-          <button onClick={save} disabled={!form.distance_km} className="btn-primary w-full py-3">Salvează</button>
+          <button onClick={() => rideGuard(save)} disabled={!form.distance_km || savingRide} className="btn-primary w-full py-3 disabled:opacity-50">{savingRide ? 'Se salvează...' : 'Salvează'}</button>
         </div>
       </Modal>
     </div>
@@ -1203,6 +1205,7 @@ function PlanTab({ session, isAdmin }) {
   const [activeSection, setActiveSection] = useState('mine') // 'mine' | 'students'
   const [studentFeedback, setStudentFeedback] = useState({})
   const [pastDoneLogs, setPastDoneLogs] = useState({}) // scheduleId -> Set of dates done
+  const [savingPlan, planGuard] = useSubmitGuard()
 
   useEffect(() => { load() }, [isAdmin])
 
@@ -1837,10 +1840,10 @@ function PlanTab({ session, isAdmin }) {
             </div>
           )}
 
-          <button onClick={save}
-            disabled={!form.name || (form.recurrence === 'weekly' && !form.weekdays.length)}
+          <button onClick={() => planGuard(save)}
+            disabled={!form.name || (form.recurrence === 'weekly' && !form.weekdays.length) || savingPlan}
             className="btn-primary w-full py-3 disabled:opacity-50">
-            {editItem ? 'Salvează modificările' : (form.student_ids?.length > 1 ? `Creează pentru ${form.student_ids.length} elevi` : 'Creează antrenament')}
+            {savingPlan ? 'Se salvează...' : (editItem ? 'Salvează modificările' : (form.student_ids?.length > 1 ? `Creează pentru ${form.student_ids.length} elevi` : 'Creează antrenament'))}
           </button>
         </div>
       </Modal>

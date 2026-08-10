@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { useSubmitGuard } from '../lib/useSubmitGuard'
 import Modal from '../components/Modal'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 
@@ -202,6 +203,8 @@ export default function Profil({ session, isAdmin }) {
   const [macroC, setMacroC] = useState(45)
   const [macroF, setMacroF] = useState(30)
   const [saving, setSaving] = useState(false)
+  const [savingWater, waterGuard] = useSubmitGuard()
+  const [savingWeight, weightGuard] = useSubmitGuard()
   const [saved, setSaved] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
   const [activeTheme, setActiveTheme] = useState(() => localStorage.getItem('app_theme') || 'dark')
@@ -622,7 +625,7 @@ export default function Profil({ session, isAdmin }) {
               </button>
             ))}
           </div>
-          <button onClick={saveWaterTarget} className="btn-primary w-full py-3">Salvează</button>
+          <button onClick={() => waterGuard(saveWaterTarget)} disabled={savingWater} className="btn-primary w-full py-3 disabled:opacity-50">{savingWater ? 'Se salvează...' : 'Salvează'}</button>
         </div>
       </Modal>
 
@@ -639,7 +642,7 @@ export default function Profil({ session, isAdmin }) {
               value={weightForm.weight_kg} onChange={e => setWeightForm(p => ({ ...p, weight_kg: e.target.value }))}
               onKeyDown={e => e.key === 'Enter' && saveWeight()} />
           </div>
-          <button onClick={saveWeight} className="btn-primary w-full py-3">Salvează</button>
+          <button onClick={() => weightGuard(saveWeight)} disabled={savingWeight} className="btn-primary w-full py-3 disabled:opacity-50">{savingWeight ? 'Se salvează...' : 'Salvează'}</button>
         </div>
       </Modal>
     </div>
