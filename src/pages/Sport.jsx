@@ -42,32 +42,34 @@ function useStravaSync(session, onSuccess) {
         await supabase.from('strava_tokens').update(data.newTokenData).eq('user_id', session.user.id)
       }
 
+      // Fetch existing notes ONCE and batch-insert, instead of one round trip per activity
       let imported = 0
       if (type === 'running' && data.running?.length) {
-        for (const run of data.running) {
-          // Check if already exists by notes containing strava_id
-          const { data: existing } = await supabase.from('running_logs')
-            .select('id').eq('user_id', session.user.id).like('notes', `%${run.strava_id}%`).single()
-          if (existing) continue
-          await supabase.from('running_logs').insert({
+        const { data: existingRuns } = await supabase.from('running_logs')
+          .select('notes').eq('user_id', session.user.id)
+        const existingNotes = (existingRuns || []).map(r => r.notes || '')
+        const newRuns = data.running.filter(run => !existingNotes.some(n => n.includes(`[strava:${run.strava_id}]`)))
+        if (newRuns.length) {
+          await supabase.from('running_logs').insert(newRuns.map(run => ({
             user_id: session.user.id, date: run.date,
             distance_km: run.distance_km, duration_min: run.duration_min,
             notes: `${run.notes} [strava:${run.strava_id}]`,
-          })
-          imported++
+          })))
         }
+        imported = newRuns.length
         setSyncMsg(`✅ ${imported} alergări noi importate din Strava!`)
       } else if (type === 'strength' && data.workouts?.length) {
-        for (const wo of data.workouts) {
-          const { data: existing } = await supabase.from('workout_logs')
-            .select('id').eq('user_id', session.user.id).like('notes', `%${wo.strava_id}%`).single()
-          if (existing) continue
-          await supabase.from('workout_logs').insert({
+        const { data: existingWorkouts } = await supabase.from('workout_logs')
+          .select('notes').eq('user_id', session.user.id)
+        const existingNotes = (existingWorkouts || []).map(w => w.notes || '')
+        const newWorkouts = data.workouts.filter(wo => !existingNotes.some(n => n.includes(`[strava:${wo.strava_id}]`)))
+        if (newWorkouts.length) {
+          await supabase.from('workout_logs').insert(newWorkouts.map(wo => ({
             user_id: session.user.id, date: wo.date, name: wo.name, type: 'strength',
             notes: `${wo.notes} [strava:${wo.strava_id}]`,
-          })
-          imported++
+          })))
         }
+        imported = newWorkouts.length
         setSyncMsg(`✅ ${imported} antrenamente noi importate din Strava!`)
       } else {
         setSyncMsg('✅ Nicio activitate nouă de importat.')
@@ -105,24 +107,27 @@ function AlergareTab({ session }) {
 
   async function saveRun() {
     if (!form.distance_km || !form.duration_min) return
-    await supabase.from('running_logs').insert({
+    setShowModal(false)
+    const payload = {
       user_id: session.user.id,
       date: form.date,
       distance_km: parseFloat(form.distance_km),
       duration_min: parseFloat(form.duration_min),
       notes: form.notes,
       start_time: form.start_time || null,
-    })
-    setShowModal(false)
+    }
     setForm({ date: today, distance_km: '', duration_min: '', notes: '', start_time: '' })
-    loadRuns()
+    const { data, error } = await supabase.from('running_logs').insert(payload).select().single()
+    if (error) { alert('Eroare: ' + error.message); return }
+    setRuns(prev => [data, ...prev].sort((a, b) => b.date.localeCompare(a.date)))
   }
 
   async function deleteRun(id) {
-    if (confirm('Ștergi alergarea?')) {
-      await supabase.from('running_logs').delete().eq('id', id)
-      loadRuns()
-    }
+    if (!confirm('Ștergi alergarea?')) return
+    const prev = runs
+    setRuns(runs.filter(r => r.id !== id)) // optimistic
+    const { error } = await supabase.from('running_logs').delete().eq('id', id)
+    if (error) { setRuns(prev); alert('Eroare: ' + error.message) }
   }
 
   function formatPace(km, min) {
@@ -284,13 +289,16 @@ function FortaTab({ session, isAdmin }) {
 
   async function saveWorkout() {
     if (!form.name) return
-    const { data: wl } = await supabase.from('workout_logs').insert({
+    setShowModal(false)
+    const { data: wl, error } = await supabase.from('workout_logs').insert({
       user_id: session.user.id, date: form.date, name: form.name, type: 'strength', notes: form.notes, start_time: form.start_time || null
     }).select().single()
+    if (error) { alert('Eroare: ' + error.message); return }
 
     const validExercises = exercises.filter(e => e.exercise_name.trim())
+    let savedExercises = []
     if (validExercises.length > 0) {
-      await supabase.from('workout_exercises').insert(
+      const { data: ex } = await supabase.from('workout_exercises').insert(
         validExercises.map(e => ({
           workout_log_id: wl.id,
           exercise_name: e.exercise_name,
@@ -298,13 +306,14 @@ function FortaTab({ session, isAdmin }) {
           reps: parseInt(e.reps),
           weight_kg: parseFloat(e.weight_kg) || 0,
         }))
-      )
+      ).select()
+      savedExercises = ex || []
     }
 
-    setShowModal(false)
+    // Insert locally instead of re-running the (potentially admin-joined) query
+    setWorkouts(prev => [{ ...wl, workout_exercises: savedExercises }, ...prev].sort((a, b) => b.date.localeCompare(a.date)))
     setForm({ date: today, name: '', notes: '' })
     setExercises([{ exercise_name: '', sets: '3', reps: '10', weight_kg: '0' }])
-    loadWorkouts()
   }
 
   async function deleteWorkout(id) {
@@ -313,10 +322,11 @@ function FortaTab({ session, isAdmin }) {
     if (wo?.user_id === session.user.id && wo?.notes?.includes('[admin:')) {
       alert('Acest antrenament a fost creat de antrenor și nu poate fi șters.'); return
     }
-    if (confirm('Ștergi antrenamentul?')) {
-      await supabase.from('workout_logs').delete().eq('id', id)
-      loadWorkouts()
-    }
+    if (!confirm('Ștergi antrenamentul?')) return
+    const prev = workouts
+    setWorkouts(workouts.filter(w => w.id !== id)) // optimistic
+    const { error } = await supabase.from('workout_logs').delete().eq('id', id)
+    if (error) { setWorkouts(prev); alert('Eroare: ' + error.message) }
   }
 
   return (
@@ -594,6 +604,8 @@ function CalendarTab({ session, isAdmin }) {
 
   async function saveAdd() {
     if (!addForm.name) return
+    // Close immediately — don't make the click wait on the network round trip
+    setShowAddModal(false)
     const targetUser = (isAdmin && addForm.student_id) ? addForm.student_id : session.user.id
     const insertData = {
       user_id: targetUser,
@@ -602,20 +614,20 @@ function CalendarTab({ session, isAdmin }) {
       type: addForm.type,
       notes: isAdmin && addForm.student_id ? `[admin:${session.user.id}]` : null,
     }
-    if (addForm.type === 'running' && addForm.distance_km) {
+    const { type, distance_km, name } = addForm
+    setAddForm({ name: '', type: 'strength', distance_km: '', student_id: '' })
+    if (type === 'running' && distance_km) {
       // For running with km, use running_logs
       await supabase.from('running_logs').insert({
         user_id: targetUser,
         date: addDate,
-        distance_km: parseFloat(addForm.distance_km),
+        distance_km: parseFloat(distance_km),
         duration_min: 0,
-        notes: addForm.name + (isAdmin && addForm.student_id ? ` [admin:${session.user.id}]` : ''),
+        notes: name + (isAdmin && addForm.student_id ? ` [admin:${session.user.id}]` : ''),
       })
     } else {
       await supabase.from('workout_logs').insert(insertData)
     }
-    setShowAddModal(false)
-    setAddForm({ name: '', type: 'strength', distance_km: '', student_id: '' })
     loadMonthData()
     if (selectedDate === addDate && selectedIsFuture) loadFuturePlan(addDate)
   }
@@ -1033,18 +1045,24 @@ function BicicletaTab({ session }) {
 
   async function save() {
     if (!form.distance_km) return
-    await supabase.from('workout_logs').insert({
+    setShowModal(false)
+    const payload = {
       user_id: session.user.id, date: form.date, type: 'cycling',
       name: `${BIKE_TYPES.find(t => t.key === form.type)?.label || '🚴'} ${form.distance_km} km`,
       notes: JSON.stringify({ distance_km: parseFloat(form.distance_km), duration_min: parseFloat(form.duration_min) || 0, bike_type: form.type, notes: form.notes }),
-    })
-    setShowModal(false)
+    }
     setForm({ date: today, distance_km: '', duration_min: '', type: 'road', notes: '' })
-    load()
+    const { data, error } = await supabase.from('workout_logs').insert(payload).select().single()
+    if (error) { alert('Eroare: ' + error.message); return }
+    setRides(prev => [data, ...prev].sort((a, b) => b.date.localeCompare(a.date)))
   }
 
   async function deleteRide(id) {
-    if (confirm('Ștergi ieșirea?')) { await supabase.from('workout_logs').delete().eq('id', id); load() }
+    if (!confirm('Ștergi ieșirea?')) return
+    const prev = rides
+    setRides(rides.filter(r => r.id !== id)) // optimistic
+    const { error } = await supabase.from('workout_logs').delete().eq('id', id)
+    if (error) { setRides(prev); alert('Eroare: ' + error.message) }
   }
 
   function parseMeta(r) {

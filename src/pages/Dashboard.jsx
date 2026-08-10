@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { getCached, setCached, invalidateCache } from '../lib/cache'
 import ProgressRing from '../components/ProgressRing'
 import Modal from '../components/Modal'
 import StreakCard from '../components/StreakCard'
@@ -25,8 +26,13 @@ function ShoppingListCard({ session }) {
 
   useEffect(() => {
     load()
-    supabase.from('foods').select('id,name,calories,protein,carbs,fat').order('name')
-      .then(({ data }) => setAllFoods(data || []))
+    const cached = getCached('foods_list')
+    if (cached) {
+      setAllFoods(cached)
+    } else {
+      supabase.from('foods').select('id,name,calories,protein,carbs,fat').order('name')
+        .then(({ data }) => { setAllFoods(data || []); setCached('foods_list', data || []) })
+    }
   }, [])
 
   async function load() {
@@ -63,21 +69,23 @@ function ShoppingListCard({ session }) {
   }
 
   async function moveToStock(item) {
-    console.log('Dashboard moveToStock:', item.id, item.name)
+    // Optimistic: remove from the shopping list instantly, roll back on error
+    setItems(prev => prev.filter(i => i.id !== item.id))
     const { data, error } = await supabase.from('pantry_items')
       .update({ list_type: 'stock', checked: false })
       .eq('id', item.id).eq('user_id', session.user.id).select()
-    console.log('Dashboard moveToStock result:', { data, error })
-    if (error) { alert('Eroare: ' + error.message); return }
-    if (!data || data.length === 0) { alert('Update fără efect — verifică SQL:\nALTER TABLE pantry_items ENABLE ROW LEVEL SECURITY;\nDROP POLICY IF EXISTS "own pantry" ON pantry_items;\nCREATE POLICY "own pantry" ON pantry_items FOR ALL USING (auth.uid() = user_id);'); return }
+    if (error || !data || data.length === 0) {
+      setItems(prev => [item, ...prev])
+      alert(error ? 'Eroare: ' + error.message : 'Update fără efect — verifică SQL:\nALTER TABLE pantry_items ENABLE ROW LEVEL SECURITY;\nDROP POLICY IF EXISTS "own pantry" ON pantry_items;\nCREATE POLICY "own pantry" ON pantry_items FOR ALL USING (auth.uid() = user_id);')
+      return
+    }
     if (item.calories) {
-      await supabase.from('foods').upsert({
+      supabase.from('foods').upsert({
         user_id: session.user.id, user_email: session.user.email,
         name: item.name, calories: item.calories || 0,
         protein: item.protein || 0, carbs: item.carbs || 0, fat: item.fat || 0,
-      }, { onConflict: 'name', ignoreDuplicates: true })
+      }, { onConflict: 'name', ignoreDuplicates: true }).then(() => invalidateCache('foods_list'))
     }
-    load()
   }
 
   async function saveAndMove() {
@@ -91,18 +99,19 @@ function ShoppingListCard({ session }) {
       carbs: parseFloat(foodForm.carbs) || 0, fat: parseFloat(foodForm.fat) || 0,
       list_type: 'stock',
     }).eq('id', selectedItem.id).eq('user_id', session.user.id).select()
-    console.log('Dashboard saveAndMove result:', { data, error })
     if (error) { alert('Eroare: ' + error.message); setSaving(false); return }
+    // Success — remove locally, no need to refetch the whole list
+    setItems(prev => prev.filter(i => i.id !== selectedItem.id))
     if (cal > 0) {
-      await supabase.from('foods').insert({
+      supabase.from('foods').insert({
         user_id: session.user.id, user_email: session.user.email,
         name: selectedItem.name, calories: cal,
         protein: parseFloat(foodForm.protein) || 0,
         carbs: parseFloat(foodForm.carbs) || 0,
         fat: parseFloat(foodForm.fat) || 0,
-      })
+      }).then(() => invalidateCache('foods_list'))
     }
-    setSaving(false); setShowAddFood(false); setSelectedItem(null); load()
+    setSaving(false); setShowAddFood(false); setSelectedItem(null)
   }
 
   if (items.length === 0) return null
@@ -230,8 +239,12 @@ function WaterCard({ session, targets }) {
   }
 
   async function addWater(amount) {
-    await supabase.from('water_logs').insert({ user_id: session.user.id, date: today, amount_ml: amount })
-    loadWater()
+    setWater(w => w + amount) // instant feedback
+    const { data, error } = await supabase.from('water_logs')
+      .insert({ user_id: session.user.id, date: today, amount_ml: amount })
+      .select().single()
+    if (error) { setWater(w => w - amount); return }
+    setLogs(prev => [...prev, data])
   }
 
   async function removeWaterLog(id, amount) {
@@ -340,18 +353,23 @@ function SupplementsCard({ session, onToggle }) {
       carbs_g:   parseFloat(form.carbs_g)   || 0,
       fat_g:     parseFloat(form.fat_g)     || 0,
     }
-    if (editItem) await supabase.from('daily_supplements').update(data).eq('id', editItem.id)
-    else await supabase.from('daily_supplements').insert(data)
+    if (editItem) {
+      const { data: updated } = await supabase.from('daily_supplements').update(data).eq('id', editItem.id).select().single()
+      setSupplements(prev => prev.map(s => s.id === editItem.id ? (updated || { ...s, ...data }) : s))
+    } else {
+      const { data: created } = await supabase.from('daily_supplements').insert(data).select().single()
+      if (created) setSupplements(prev => [...prev, created])
+    }
     setForm({ name: '', amount_g: '', unit: 'g', calories: '', protein_g: '', carbs_g: '', fat_g: '' })
-    setShowAddForm(false); setEditItem(null); setShowMacros(false); loadAll()
+    setShowAddForm(false); setEditItem(null); setShowMacros(false)
   }
 
   async function deleteSupplement(id) {
-    if (confirm('Ștergi suplimentul?')) {
-      await supabase.from('daily_supplements').delete().eq('id', id)
-      loadAll()
-      onToggle?.()
-    }
+    if (!confirm('Ștergi suplimentul?')) return
+    setSupplements(prev => prev.filter(s => s.id !== id)) // optimistic
+    const { error } = await supabase.from('daily_supplements').delete().eq('id', id)
+    if (error) { loadAll(); alert('Eroare: ' + error.message); return }
+    onToggle?.()
   }
 
   function openEdit(s) {
@@ -823,8 +841,14 @@ export default function Dashboard({ session, isAdmin }) {
 
   async function openQuickAdd() {
     if (!quickFoods.length) {
-      const { data } = await supabase.from('foods').select('id, name, calories, protein, carbs, fat, serving_size, serving_unit').order('name')
-      setQuickFoods(data || [])
+      const cached = getCached('foods_list_full')
+      if (cached) {
+        setQuickFoods(cached)
+      } else {
+        const { data } = await supabase.from('foods').select('id, name, calories, protein, carbs, fat, serving_size, serving_unit').order('name')
+        setQuickFoods(data || [])
+        setCached('foods_list_full', data || [])
+      }
     }
     setQuickSelected(null); setQuickSearch(''); setQuickQty('100'); setQuickPicking(false)
     setShowQuickNewForm(false); setQuickNewForm({ name: '', calories: '', protein: '', carbs: '', fat: '' })
@@ -852,6 +876,7 @@ export default function Dashboard({ session, isAdmin }) {
       setQuickSelected(food)
       setShowQuickNewForm(false)
       setQuickPicking(false)
+      invalidateCache('foods_list'); invalidateCache('foods_list_full')
     }
   }
 
@@ -865,9 +890,17 @@ export default function Dashboard({ session, isAdmin }) {
       mealLog = data
     }
     const qg = parseFloat(quickQty) || 100
-    await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: quickSelected.id, quantity_g: qg })
+    const { error } = await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: quickSelected.id, quantity_g: qg })
     setShowQuickAdd(false)
-    loadData()
+    if (error) { alert('Eroare: ' + error.message); return }
+    // Update today's totals locally instead of re-running every dashboard query
+    const r = qg / 100
+    setTodayNutrition(prev => ({
+      calories: prev.calories + (quickSelected.calories || 0) * r,
+      protein: prev.protein + (quickSelected.protein || 0) * r,
+      carbs: prev.carbs + (quickSelected.carbs || 0) * r,
+      fat: prev.fat + (quickSelected.fat || 0) * r,
+    }))
   }
 
   async function loadData() {
@@ -1062,6 +1095,7 @@ export default function Dashboard({ session, isAdmin }) {
                       setQuickFoods(prev => [...prev, saved].sort((a,b) => a.name.localeCompare(b.name)))
                       setQuickSelected(saved)
                       setQuickPicking(false); setShowQuickScanner(false); setQuickSearch('')
+                      invalidateCache('foods_list'); invalidateCache('foods_list_full')
                     }
                   }}
                   onClose={() => setShowQuickScanner(false)}

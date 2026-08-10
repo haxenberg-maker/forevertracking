@@ -13,6 +13,7 @@ const Camara         = lazy(() => import('./pages/Camara'))
 const Utilizatori    = lazy(() => import('./pages/Utilizatori'))
 const Buget          = lazy(() => import('./pages/Buget'))
 const Raport         = lazy(() => import('./pages/Raport'))
+const Onboarding     = lazy(() => import('./pages/Onboarding'))
 
 function PageLoader() {
   return (
@@ -91,7 +92,11 @@ export default function App() {
 
   if (!session) return <Auth />
 
-  if (!onboardingDone) return <Onboarding session={session} onDone={() => setOnboardingDone(true)} />
+  if (!onboardingDone) return (
+    <Suspense fallback={<PageLoader />}>
+      <Onboarding session={session} onDone={() => setOnboardingDone(true)} />
+    </Suspense>
+  )
 
   return (
     <BrowserRouter>

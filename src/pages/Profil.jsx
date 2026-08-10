@@ -272,31 +272,42 @@ export default function Profil({ session, isAdmin }) {
       activity_level: ep.activity_level, goal: ep.goal, onboarding_done: true,
     }, { onConflict: 'user_id' })
     if (macroOk && bmr > 0) {
-      await supabase.from('user_targets').upsert({
+      const newTargets = {
         user_id: uid, calories: targetKcal,
         protein_g: Math.round((targetKcal * macroP / 100) / 4),
         carbs_g: Math.round((targetKcal * macroC / 100) / 4),
         fat_g: Math.round((targetKcal * macroF / 100) / 9),
         water_ml: Math.round((parseFloat(ep.weight_kg || latestWeight || 70)) * 35),
-      }, { onConflict: 'user_id' })
+      }
+      await supabase.from('user_targets').upsert(newTargets, { onConflict: 'user_id' })
+      setTargets(newTargets); setWaterTarget(newTargets.water_ml)
     }
     setProfile({ ...ep }); setSaving(false); setSaved(true)
-    setTimeout(() => { setSaved(false); setShowEditProfile(false); loadData() }, 1500)
+    setTimeout(() => { setSaved(false); setShowEditProfile(false) }, 1500)
   }
 
   async function saveWaterTarget() {
-    await supabase.from('user_targets').upsert({ user_id: session.user.id, water_ml: waterTarget }, { onConflict: 'user_id' })
-    setShowWaterModal(false); loadData()
+    setShowWaterModal(false)
+    const { error } = await supabase.from('user_targets').upsert({ user_id: session.user.id, water_ml: waterTarget }, { onConflict: 'user_id' })
+    if (error) { alert('Eroare: ' + error.message); return }
+    setTargets(prev => prev ? { ...prev, water_ml: waterTarget } : prev)
   }
 
   async function saveWeight() {
     if (!weightForm.weight_kg) return
-    await supabase.from('weight_logs').insert({ user_id: session.user.id, date: weightForm.date, weight_kg: parseFloat(weightForm.weight_kg) })
-    setShowWeightModal(false); setWeightForm({ date: getToday(), weight_kg: '' }); loadData()
+    setShowWeightModal(false)
+    const payload = { user_id: session.user.id, date: weightForm.date, weight_kg: parseFloat(weightForm.weight_kg) }
+    setWeightForm({ date: getToday(), weight_kg: '' })
+    const { data, error } = await supabase.from('weight_logs').insert(payload).select().single()
+    if (error) { alert('Eroare: ' + error.message); return }
+    setWeights(prev => [data, ...prev].sort((a, b) => b.date.localeCompare(a.date)))
   }
 
   async function deleteWeight(id) {
-    await supabase.from('weight_logs').delete().eq('id', id); loadData()
+    const prev = weights
+    setWeights(weights.filter(w => w.id !== id)) // optimistic
+    const { error } = await supabase.from('weight_logs').delete().eq('id', id)
+    if (error) { setWeights(prev); alert('Eroare: ' + error.message) }
   }
 
   const weightChange = weights.length >= 2 ? (weights[0].weight_kg - weights[weights.length - 1].weight_kg).toFixed(1) : null
