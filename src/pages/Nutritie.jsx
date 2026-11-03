@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import Modal from '../components/Modal'
-import { getCached, setCached, invalidateCache } from '../lib/cache'
+import { swr, getFoods, invalidateFoods } from '../lib/cache'
 import BarcodeScanner from '../components/BarcodeScanner'
 
 function getToday() {
@@ -66,42 +66,42 @@ function AziTab({ session }) {
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
-    // Use cached foods if available (saves ~200ms on revisit)
-    const cachedFoods = getCached('foods')
-    const [
-      foodsRes,
-      { data: pantry },
-      { data: templates },
-      { data: sups },
-    ] = await Promise.all([
-      cachedFoods ? Promise.resolve({ data: cachedFoods }) : supabase.from('foods').select('*').order('name'),
-      supabase.from('pantry_items').select('*').eq('user_id', session.user.id).eq('list_type', 'stock'),
-      supabase.from('meal_templates')
-        .select(`id, name, user_id, is_public, meal_template_items(quantity_g, foods(id, name, calories, protein, carbs, fat))`)
-        .order('name'),
-      supabase.from('daily_supplements').select('*').eq('user_id', session.user.id),
-    ])
-    const foods = foodsRes.data || []
-    if (!cachedFoods) setCached('foods', foods)
-    setAllFoods(foods)
-    setPantryItems(pantry || [])
-    setMealTemplates((templates || []).filter(t => t.user_id === session.user.id || t.is_public === true))
-    if (sups?.length) {
-      const { data: logs } = await supabase.from('supplement_logs').select('*').eq('user_id', session.user.id).eq('date', today).eq('taken', true)
-      const takenIds = new Set((logs || []).map(l => l.supplement_id))
-      setTakenSupplements((sups || []).filter(s => takenIds.has(s.id) && (s.calories > 0 || s.protein_g > 0 || s.carbs_g > 0 || s.fat_g > 0)))
-    } else {
-      setTakenSupplements([])
-    }
+    const uid = session.user.id
+    // Lista de alimente: un singur fetch partajat între pagini (cache 10 min)
+    getFoods(supabase).then(setAllFoods)
     loadMeals()
+    await swr(`${uid}:nutri:init:${today}`, async () => {
+      const [pantry, templates, sups, logs] = await Promise.all([
+        supabase.from('pantry_items').select('*').eq('user_id', uid).eq('list_type', 'stock'),
+        supabase.from('meal_templates')
+          .select(`id, name, user_id, is_public, meal_template_items(quantity_g, foods(id, name, calories, protein, carbs, fat))`)
+          .order('name'),
+        supabase.from('daily_supplements').select('*').eq('user_id', uid),
+        supabase.from('supplement_logs').select('*').eq('user_id', uid).eq('date', today).eq('taken', true),
+      ])
+      return {
+        pantry: pantry.data, templates: templates.data, sups: sups.data, logs: logs.data,
+        error: pantry.error || templates.error || sups.error || logs.error || undefined,
+      }
+    }, ({ pantry, templates, sups, logs }) => {
+      setPantryItems(pantry || [])
+      setMealTemplates((templates || []).filter(t => t.user_id === uid || t.is_public === true))
+      if (sups?.length) {
+        const takenIds = new Set((logs || []).map(l => l.supplement_id))
+        setTakenSupplements(sups.filter(s => takenIds.has(s.id) && (s.calories > 0 || s.protein_g > 0 || s.carbs_g > 0 || s.fat_g > 0)))
+      } else {
+        setTakenSupplements([])
+      }
+    })
   }
 
   async function loadMeals() {
-    const { data } = await supabase.from('meal_logs').select(`
+    const uid = session.user.id
+    await swr(`${uid}:meals:${today}`, () => supabase.from('meal_logs').select(`
       id, meal_type,
       meal_items(id, quantity_g, group_id, group_name, foods(id, name, calories, protein, carbs, fat))
-    `).eq('user_id', session.user.id).eq('date', today)
-    setMeals(data || [])
+    `).eq('user_id', uid).eq('date', today),
+      ({ data }) => setMeals(data || []))
   }
 
   // Convert any unit to grams equivalent for storage
@@ -501,7 +501,7 @@ function AziTab({ session }) {
                       fat: foodData.fat, barcode: foodData.barcode,
                     }).select().single()
                     if (saved) {
-                      invalidateCache('foods')
+                      invalidateFoods()
                       setAllFoods(prev => [...prev, saved])
                       setSelectedFood(saved)
                       setPickingFood(false); setShowScanner(false); setSearch('')
@@ -648,16 +648,15 @@ function MeseTab({ session, isAdmin }) {
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
-    setLoading(true)
-    const { data: t } = await supabase.from('meal_templates').select(`
+    getFoods(supabase).then(setAllFoods)
+    await swr(`${session.user.id}:templates:full`, () => supabase.from('meal_templates').select(`
       id, name, user_id, is_public,
       meal_template_items(id, quantity_g, foods(id, name, calories, protein, carbs, fat))
-    `).order('name')
-    // Show only own templates + public ones (hide other users' private templates)
-    setTemplates((t || []).filter(r => r.user_id === session.user.id || r.is_public === true))
-    const { data: f } = await supabase.from('foods').select('*').order('name')
-    setAllFoods(f || [])
-    setLoading(false)
+    `).order('name'), ({ data: t }) => {
+      // Show only own templates + public ones (hide other users' private templates)
+      setTemplates((t || []).filter(r => r.user_id === session.user.id || r.is_public === true))
+      setLoading(false)
+    })
   }
 
   function openAdd() { setForm({ name: '', is_public: false }); setItems([{ food_id: '', food: null, quantity_g: '100' }]); setEditTemplate(null); setShowModal(true) }
@@ -896,14 +895,8 @@ function AlimenteTab({ session, isAdmin }) {
   useEffect(() => { loadFoods() }, [])
 
   async function loadFoods(bust = false) {
-    setLoading(true)
-    if (bust) invalidateCache('foods')
-    const cached = getCached('foods')
-    if (cached) { setFoods(cached); setLoading(false); return }
-    const { data } = await supabase.from('foods').select('*').order('name')
-    const foods = data || []
-    setCached('foods', foods)
-    setFoods(foods)
+    if (bust) invalidateFoods()
+    setFoods(await getFoods(supabase))
     setLoading(false)
   }
 
@@ -1100,8 +1093,9 @@ function TargeturiTab({ session }) {
   useEffect(() => { loadTargets() }, [])
 
   async function loadTargets() {
-    const { data } = await supabase.from('user_targets').select('*').eq('user_id', session.user.id).single()
-    if (data) setTargets(data)
+    const uid = session.user.id
+    await swr(`${uid}:targets`, () => supabase.from('user_targets').select('*').eq('user_id', uid).single(),
+      ({ data }) => { if (data) setTargets(data) })
   }
 
   async function saveTargets() {

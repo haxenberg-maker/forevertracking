@@ -1,18 +1,21 @@
-import { useState, useEffect, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { supabase } from './lib/supabase'
+import { clearCache } from './lib/cache'
 import Footer from './components/Footer'
 import Auth from './pages/Auth'
 
 const Dashboard      = lazy(() => import('./pages/Dashboard'))
 const Nutritie       = lazy(() => import('./pages/Nutritie'))
 const Sport          = lazy(() => import('./pages/Sport'))
+const FitnessRpg     = lazy(() => import('./pages/fitness/FitnessRpg'))
 const Profil         = lazy(() => import('./pages/Profil'))
 const StravaCallback = lazy(() => import('./pages/StravaCallback'))
 const Camara         = lazy(() => import('./pages/Camara'))
 const Utilizatori    = lazy(() => import('./pages/Utilizatori'))
 const Buget          = lazy(() => import('./pages/Buget'))
 const Raport         = lazy(() => import('./pages/Raport'))
+const Onboarding     = lazy(() => import('./pages/Onboarding'))
 
 function PageLoader() {
   return (
@@ -51,19 +54,43 @@ export default function App() {
     root.setAttribute('data-theme', saved)
   }, [])
 
+  const profileUid = useRef(null)
+
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      if (session) fetchProfile(session.user.id)
-      else setLoading(false)
-    })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      if (session) fetchProfile(session.user.id)
-      else { setIsAdmin(false); setAccountType('user'); setOnboardingDone(true); setLoading(false) }
-    })
+    const handleSession = (next) => {
+      // Aceeași sesiune (ex. revenire în tab) => păstrăm obiectul vechi, ca să nu se re-randeze tot
+      setSession(prev => (prev && next && prev.access_token === next.access_token && prev.user?.id === next.user?.id) ? prev : next)
+      if (next) {
+        // Profilul se cere o singură dată per utilizator, nu la fiecare refresh de token / revenire în tab
+        if (profileUid.current !== next.user.id) {
+          profileUid.current = next.user.id
+          fetchProfile(next.user.id)
+        }
+      } else {
+        profileUid.current = null
+        clearCache()
+        setIsAdmin(false); setAccountType('user'); setOnboardingDone(true); setLoading(false)
+      }
+    }
+    supabase.auth.getSession().then(({ data: { session } }) => handleSession(session))
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => handleSession(session))
     return () => subscription.unsubscribe()
   }, [])
+
+  // După ce aplicația e gata, descarcă în fundal paginile mari => navigarea devine instantanee
+  useEffect(() => {
+    if (!session || !onboardingDone) return
+    const prefetch = () => {
+      import('./pages/Nutritie')
+      import('./pages/Sport')
+    }
+    if ('requestIdleCallback' in window) {
+      const id = requestIdleCallback(prefetch, { timeout: 4000 })
+      return () => cancelIdleCallback(id)
+    }
+    const id = setTimeout(prefetch, 2000) // Safari/iOS nu are requestIdleCallback
+    return () => clearTimeout(id)
+  }, [session?.user?.id, onboardingDone])
 
   async function fetchProfile(uid) {
     const { data } = await supabase.from('user_profiles').select('is_admin, onboarding_done, account_type').eq('user_id', uid).single()
@@ -91,24 +118,31 @@ export default function App() {
 
   if (!session) return <Auth />
 
-  if (!onboardingDone) return <Onboarding session={session} onDone={() => setOnboardingDone(true)} />
+  if (!onboardingDone) return (
+    <Suspense fallback={<PageLoader />}>
+      <Onboarding session={session} onDone={() => setOnboardingDone(true)} />
+    </Suspense>
+  )
 
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <div className="min-h-screen bg-dark-900">
         <Suspense fallback={<PageLoader />}>
           <Routes>
             <Route path="/strava-callback" element={<StravaCallback session={session} />} />
-            <Route path="/" element={<><Dashboard session={session} isAdmin={isAdmin} /><Footer isAdmin={isAdmin} /></>} />
-            <Route path="/nutritie" element={<><Nutritie session={session} isAdmin={isAdmin} /><Footer isAdmin={isAdmin} /></>} />
-            <Route path="/sport" element={<><Sport session={session} isAdmin={isAdmin} accountType={accountType} /><Footer isAdmin={isAdmin} /></>} />
-            <Route path="/camara" element={<><Camara session={session} /><Footer isAdmin={isAdmin} /></>} />
-            <Route path="/profil" element={<><Profil session={session} isAdmin={isAdmin} /><Footer isAdmin={isAdmin} /></>} />
-            <Route path="/buget" element={<><Buget session={session} /><Footer isAdmin={isAdmin} /></>} />
-            <Route path="/raport" element={<><Raport session={session} /><Footer isAdmin={isAdmin} /></>} />
-            {isAdmin && <Route path="/utilizatori" element={<><Utilizatori session={session} /><Footer isAdmin={isAdmin} /></>} />}
+            <Route path="/" element={<Dashboard session={session} isAdmin={isAdmin} />} />
+            <Route path="/nutritie" element={<Nutritie session={session} isAdmin={isAdmin} />} />
+            <Route path="/sport" element={<Sport session={session} isAdmin={isAdmin} accountType={accountType} />} />
+            <Route path="/fitness-rpg" element={<FitnessRpg session={session} />} />
+            <Route path="/camara" element={<Camara session={session} />} />
+            <Route path="/profil" element={<Profil session={session} isAdmin={isAdmin} />} />
+            <Route path="/buget" element={<Buget session={session} />} />
+            <Route path="/raport" element={<Raport session={session} />} />
+            {isAdmin && <Route path="/utilizatori" element={<Utilizatori session={session} />} />}
           </Routes>
         </Suspense>
+        {/* Un singur Footer, montat o dată — nu se mai recreează la fiecare navigare */}
+        <Footer isAdmin={isAdmin} />
       </div>
     </BrowserRouter>
   )

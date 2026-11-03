@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { swr, getFoods, invalidateFoods } from '../lib/cache'
+import { useSubmitGuard } from '../lib/useSubmitGuard'
 import ProgressRing from '../components/ProgressRing'
 import Modal from '../components/Modal'
 import StreakCard from '../components/StreakCard'
 import BarcodeScanner from '../components/BarcodeScanner'
+import FitnessDashboardHero from '../components/FitnessDashboardHero'
 
 function getToday() {
   const d = new Date()
@@ -23,22 +26,28 @@ function ShoppingListCard({ session }) {
 
   const [allFoods, setAllFoods] = useState([])
 
-  useEffect(() => {
-    load()
-    supabase.from('foods').select('id,name,calories,protein,carbs,fat').order('name')
-      .then(({ data }) => setAllFoods(data || []))
-  }, [])
+  useEffect(() => { load() }, [])
 
   async function load() {
-    const { data } = await supabase.from('pantry_items')
-      .select('*').eq('user_id', session.user.id).eq('list_type', 'shopping')
-      .order('created_at', { ascending: false })
-    setItems(data || [])
+    const uid = session.user.id
+    await swr(`${uid}:shopping`, () => supabase.from('pantry_items')
+      .select('*').eq('user_id', uid).eq('list_type', 'shopping')
+      .order('created_at', { ascending: false }),
+      ({ data }) => setItems(data || []))
+  }
+
+  // Lista de alimente se aduce DOAR când e nevoie de ea (cache partajat, 10 min)
+  async function ensureFoods() {
+    if (allFoods.length) return allFoods
+    const foods = await getFoods(supabase)
+    setAllFoods(foods)
+    return foods
   }
 
   async function check(item) {
     // Look up nutrition from foods DB if item doesn't have it
-    const linked = allFoods.find(f =>
+    const foodsList = item.calories ? allFoods : await ensureFoods()
+    const linked = foodsList.find(f =>
       f.id === item.food_id || f.name.toLowerCase() === item.name.toLowerCase()
     )
     const cal = item.calories || linked?.calories || null
@@ -63,21 +72,23 @@ function ShoppingListCard({ session }) {
   }
 
   async function moveToStock(item) {
-    console.log('Dashboard moveToStock:', item.id, item.name)
+    // Optimistic: remove from the shopping list instantly, roll back on error
+    setItems(prev => prev.filter(i => i.id !== item.id))
     const { data, error } = await supabase.from('pantry_items')
       .update({ list_type: 'stock', checked: false })
       .eq('id', item.id).eq('user_id', session.user.id).select()
-    console.log('Dashboard moveToStock result:', { data, error })
-    if (error) { alert('Eroare: ' + error.message); return }
-    if (!data || data.length === 0) { alert('Update fără efect — verifică SQL:\nALTER TABLE pantry_items ENABLE ROW LEVEL SECURITY;\nDROP POLICY IF EXISTS "own pantry" ON pantry_items;\nCREATE POLICY "own pantry" ON pantry_items FOR ALL USING (auth.uid() = user_id);'); return }
+    if (error || !data || data.length === 0) {
+      setItems(prev => [item, ...prev])
+      alert(error ? 'Eroare: ' + error.message : 'Update fără efect — verifică SQL:\nALTER TABLE pantry_items ENABLE ROW LEVEL SECURITY;\nDROP POLICY IF EXISTS "own pantry" ON pantry_items;\nCREATE POLICY "own pantry" ON pantry_items FOR ALL USING (auth.uid() = user_id);')
+      return
+    }
     if (item.calories) {
-      await supabase.from('foods').upsert({
+      supabase.from('foods').upsert({
         user_id: session.user.id, user_email: session.user.email,
         name: item.name, calories: item.calories || 0,
         protein: item.protein || 0, carbs: item.carbs || 0, fat: item.fat || 0,
-      }, { onConflict: 'name', ignoreDuplicates: true })
+      }, { onConflict: 'name', ignoreDuplicates: true }).then(() => invalidateFoods())
     }
-    load()
   }
 
   async function saveAndMove() {
@@ -91,18 +102,19 @@ function ShoppingListCard({ session }) {
       carbs: parseFloat(foodForm.carbs) || 0, fat: parseFloat(foodForm.fat) || 0,
       list_type: 'stock',
     }).eq('id', selectedItem.id).eq('user_id', session.user.id).select()
-    console.log('Dashboard saveAndMove result:', { data, error })
     if (error) { alert('Eroare: ' + error.message); setSaving(false); return }
+    // Success — remove locally, no need to refetch the whole list
+    setItems(prev => prev.filter(i => i.id !== selectedItem.id))
     if (cal > 0) {
-      await supabase.from('foods').insert({
+      supabase.from('foods').insert({
         user_id: session.user.id, user_email: session.user.email,
         name: selectedItem.name, calories: cal,
         protein: parseFloat(foodForm.protein) || 0,
         carbs: parseFloat(foodForm.carbs) || 0,
         fat: parseFloat(foodForm.fat) || 0,
-      })
+      }).then(() => invalidateFoods())
     }
-    setSaving(false); setShowAddFood(false); setSelectedItem(null); load()
+    setSaving(false); setShowAddFood(false); setSelectedItem(null)
   }
 
   if (items.length === 0) return null
@@ -173,8 +185,8 @@ function ShoppingListCard({ session }) {
             ))}
           </div>
           <div className="flex gap-2">
-            <button onClick={() => moveToStock(selectedItem).then(() => setShowAddFood(false))}
-              className="btn-ghost flex-1 py-3 text-sm">Sări peste</button>
+            <button onClick={() => { setSaving(true); moveToStock(selectedItem).then(() => { setShowAddFood(false); setSaving(false) }) }}
+              disabled={saving} className="btn-ghost flex-1 py-3 text-sm disabled:opacity-50">Sări peste</button>
             <button onClick={saveAndMove} disabled={saving || !foodForm.calories}
               className="btn-primary flex-1 py-3 disabled:opacity-50">
               {saving ? 'Se salvează...' : '📦 Mută în stoc'}
@@ -223,15 +235,22 @@ function WaterCard({ session, targets }) {
   useEffect(() => { loadWater() }, [])
 
   async function loadWater() {
-    const { data } = await supabase.from('water_logs').select('id, amount_ml, created_at')
-      .eq('user_id', session.user.id).eq('date', today).order('created_at')
-    setLogs(data || [])
-    setWater((data || []).reduce((s, r) => s + r.amount_ml, 0))
+    const uid = session.user.id
+    await swr(`${uid}:water:${today}`, () => supabase.from('water_logs').select('id, amount_ml, created_at')
+      .eq('user_id', uid).eq('date', today).order('created_at'),
+      ({ data }) => {
+        setLogs(data || [])
+        setWater((data || []).reduce((s, r) => s + r.amount_ml, 0))
+      })
   }
 
   async function addWater(amount) {
-    await supabase.from('water_logs').insert({ user_id: session.user.id, date: today, amount_ml: amount })
-    loadWater()
+    setWater(w => w + amount) // instant feedback
+    const { data, error } = await supabase.from('water_logs')
+      .insert({ user_id: session.user.id, date: today, amount_ml: amount })
+      .select().single()
+    if (error) { setWater(w => w - amount); return }
+    setLogs(prev => [...prev, data])
   }
 
   async function removeWaterLog(id, amount) {
@@ -300,19 +319,27 @@ function SupplementsCard({ session, onToggle }) {
   const [form, setForm] = useState({ name: '', amount_g: '', unit: 'g', calories: '', protein_g: '', carbs_g: '', fat_g: '' })
   const [editItem, setEditItem] = useState(null)
   const [showMacros, setShowMacros] = useState(false)
+  const [savingSup, saveGuard] = useSubmitGuard()
   const UNITS = ['g', 'mg', 'ml', 'capsule', 'tabletă', 'linguriță']
 
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
-    const { data: sups } = await supabase.from('daily_supplements').select('*').eq('user_id', session.user.id).order('created_at')
-    setSupplements(sups || [])
-    if (sups?.length) {
-      const { data: logData } = await supabase.from('supplement_logs').select('*').eq('user_id', session.user.id).eq('date', today)
-      const logMap = {}
-      ;(logData || []).forEach(l => { logMap[l.supplement_id] = l })
-      setLogs(logMap)
-    }
+    const uid = session.user.id
+    await swr(`${uid}:sups:${today}`, async () => {
+      const [a, b] = await Promise.all([
+        supabase.from('daily_supplements').select('*').eq('user_id', uid).order('created_at'),
+        supabase.from('supplement_logs').select('*').eq('user_id', uid).eq('date', today),
+      ])
+      return { sups: a.data, logData: b.data, error: a.error || b.error || undefined }
+    }, ({ sups, logData }) => {
+      setSupplements(sups || [])
+      if (sups?.length) {
+        const logMap = {}
+        ;(logData || []).forEach(l => { logMap[l.supplement_id] = l })
+        setLogs(logMap)
+      }
+    })
   }
 
   async function toggleTaken(sup) {
@@ -340,18 +367,23 @@ function SupplementsCard({ session, onToggle }) {
       carbs_g:   parseFloat(form.carbs_g)   || 0,
       fat_g:     parseFloat(form.fat_g)     || 0,
     }
-    if (editItem) await supabase.from('daily_supplements').update(data).eq('id', editItem.id)
-    else await supabase.from('daily_supplements').insert(data)
+    if (editItem) {
+      const { data: updated } = await supabase.from('daily_supplements').update(data).eq('id', editItem.id).select().single()
+      setSupplements(prev => prev.map(s => s.id === editItem.id ? (updated || { ...s, ...data }) : s))
+    } else {
+      const { data: created } = await supabase.from('daily_supplements').insert(data).select().single()
+      if (created) setSupplements(prev => [...prev, created])
+    }
     setForm({ name: '', amount_g: '', unit: 'g', calories: '', protein_g: '', carbs_g: '', fat_g: '' })
-    setShowAddForm(false); setEditItem(null); setShowMacros(false); loadAll()
+    setShowAddForm(false); setEditItem(null); setShowMacros(false)
   }
 
   async function deleteSupplement(id) {
-    if (confirm('Ștergi suplimentul?')) {
-      await supabase.from('daily_supplements').delete().eq('id', id)
-      loadAll()
-      onToggle?.()
-    }
+    if (!confirm('Ștergi suplimentul?')) return
+    setSupplements(prev => prev.filter(s => s.id !== id)) // optimistic
+    const { error } = await supabase.from('daily_supplements').delete().eq('id', id)
+    if (error) { loadAll(); alert('Eroare: ' + error.message); return }
+    onToggle?.()
   }
 
   function openEdit(s) {
@@ -427,7 +459,7 @@ function SupplementsCard({ session, onToggle }) {
           )}
           <div className="flex gap-2">
             <button onClick={() => { setShowAddForm(false); setEditItem(null); setShowMacros(false) }} className="btn-ghost flex-1 py-3">← Înapoi</button>
-            <button onClick={saveSupplement} className="btn-primary flex-1 py-3">{editItem ? 'Salvează' : 'Adaugă'}</button>
+            <button onClick={() => saveGuard(saveSupplement)} disabled={savingSup} className="btn-primary flex-1 py-3 disabled:opacity-50">{savingSup ? 'Se salvează...' : (editItem ? 'Salvează' : 'Adaugă')}</button>
           </div>
         </div>
       )}
@@ -504,49 +536,48 @@ function UpcomingWorkoutsCard({ session }) {
   useEffect(() => { load() }, [])
 
   async function load() {
-    setLoading(true)
     const uid = session.user.id
-    const [{ data: all }, { data: excepts }] = await Promise.all([
-      supabase.from('workout_schedules').select('*').eq('user_id', uid),
-      supabase.from('workout_schedule_exceptions').select('schedule_id, exception_date').eq('user_id', uid),
-    ])
+    const dateOf = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+    const lastDay = new Date(); lastDay.setDate(lastDay.getDate() + 6)
+    await swr(`${uid}:sched7:${today}`, async () => {
+      const [a, b, c] = await Promise.all([
+        supabase.from('workout_schedules').select('*').eq('user_id', uid),
+        supabase.from('workout_schedule_exceptions').select('schedule_id, exception_date').eq('user_id', uid),
+        supabase.from('workout_schedule_logs').select('*').eq('user_id', uid).gte('date', today).lte('date', dateOf(lastDay)),
+      ])
+      return { all: a.data, excepts: b.data, logData: c.data, error: a.error || b.error || c.error || undefined }
+    }, ({ all, excepts, logData }) => {
+      const exSet = new Set((excepts || []).map(e => `${e.schedule_id}_${e.exception_date}`))
+      const todayList = []
+      const futureList = []
 
-    const exSet = new Set((excepts || []).map(e => `${e.schedule_id}_${e.exception_date}`))
+      for (let i = 0; i < 7; i++) {
+        const d = new Date()
+        d.setDate(d.getDate() + i)
+        const dateStr = dateOf(d)
+        const wd = d.getDay() === 0 ? 6 : d.getDay() - 1
 
-    const todayList = []
-    const futureList = []
+        for (const s of (all || [])) {
+          // Skip if exception exists for this schedule+date
+          if (exSet.has(`${s.id}_${dateStr}`)) continue
 
-    for (let i = 0; i < 7; i++) {
-      const d = new Date()
-      d.setDate(d.getDate() + i)
-      const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-      const wd = d.getDay() === 0 ? 6 : d.getDay() - 1
-
-      for (const s of (all || [])) {
-        // Skip if exception exists for this schedule+date
-        if (exSet.has(`${s.id}_${dateStr}`)) continue
-
-        const matches = (s.recurrence === 'once' && s.scheduled_date === dateStr) ||
-                        (s.recurrence === 'weekly' && (s.weekdays || []).includes(wd))
-        if (!matches) continue
-        const entry = { ...s, _date: dateStr, _dayLabel: i === 0 ? 'Azi' : d.toLocaleDateString('ro-RO', { weekday: 'short', day: 'numeric', month: 'short' }) }
-        if (i === 0) todayList.push(entry)
-        else futureList.push(entry)
+          const matches = (s.recurrence === 'once' && s.scheduled_date === dateStr) ||
+                          (s.recurrence === 'weekly' && (s.weekdays || []).includes(wd))
+          if (!matches) continue
+          const entry = { ...s, _date: dateStr, _dayLabel: i === 0 ? 'Azi' : d.toLocaleDateString('ro-RO', { weekday: 'short', day: 'numeric', month: 'short' }) }
+          if (i === 0) todayList.push(entry)
+          else futureList.push(entry)
+        }
       }
-    }
 
-    setTodaySchedules(todayList)
-    setFutureSchedules(futureList)
+      setTodaySchedules(todayList)
+      setFutureSchedules(futureList)
 
-    const allEntries = [...todayList, ...futureList]
-    if (allEntries.length) {
-      const { data: logData } = await supabase.from('workout_schedule_logs')
-        .select('*').eq('user_id', uid).in('date', [...new Set(allEntries.map(u => u._date))])
       const logMap = {}
       ;(logData || []).forEach(l => { logMap[`${l.schedule_id}_${l.date}`] = l })
       setLogs(logMap)
-    }
-    setLoading(false)
+      setLoading(false)
+    })
   }
 
   async function toggle(s) {
@@ -751,12 +782,15 @@ function QuoteCard({ isAdmin }) {
   const [quote, setQuote] = useState('')
   const [editing, setEditing] = useState(false)
   const [input, setInput] = useState('')
+  const [savingQuote, quoteGuard] = useSubmitGuard()
 
   useEffect(() => { load() }, [])
 
   async function load() {
-    const { data } = await supabase.from('app_settings').select('value').eq('key', 'daily_quote').single()
-    if (data?.value) setQuote(data.value)
+    await swr('static:app_settings:daily_quote',
+      () => supabase.from('app_settings').select('value').eq('key', 'daily_quote').single(),
+      ({ data }) => { if (data?.value) setQuote(data.value) },
+      { ttl: 10 * 60 * 1000 })
   }
 
   async function save() {
@@ -774,7 +808,7 @@ function QuoteCard({ isAdmin }) {
             value={input} onChange={e => setInput(e.target.value)} autoFocus />
           <div className="flex gap-2">
             <button onClick={() => setEditing(false)} className="btn-ghost flex-1 py-2 text-xs">Anulează</button>
-            <button onClick={save} className="btn-primary flex-1 py-2 text-xs">Salvează</button>
+            <button onClick={() => quoteGuard(save)} disabled={savingQuote} className="btn-primary flex-1 py-2 text-xs disabled:opacity-50">{savingQuote ? '...' : 'Salvează'}</button>
           </div>
         </div>
       ) : quote ? (
@@ -814,6 +848,8 @@ export default function Dashboard({ session, isAdmin }) {
   const [quickNewForm, setQuickNewForm] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '' })
   const [showQuickNewForm, setShowQuickNewForm] = useState(false)
   const [showQuickScanner, setShowQuickScanner] = useState(false)
+  const [savingQuickAdd, quickAddGuard] = useSubmitGuard()
+  const [savingNewFood, newFoodGuard] = useSubmitGuard()
 
   const now = new Date()
   const dateStr = `${dayNames[now.getDay()]}, ${now.getDate()} ${monthNames[now.getMonth()]}`
@@ -822,10 +858,7 @@ export default function Dashboard({ session, isAdmin }) {
   useEffect(() => { loadData() }, [])
 
   async function openQuickAdd() {
-    if (!quickFoods.length) {
-      const { data } = await supabase.from('foods').select('id, name, calories, protein, carbs, fat, serving_size, serving_unit').order('name')
-      setQuickFoods(data || [])
-    }
+    if (!quickFoods.length) setQuickFoods(await getFoods(supabase))
     setQuickSelected(null); setQuickSearch(''); setQuickQty('100'); setQuickPicking(false)
     setShowQuickNewForm(false); setQuickNewForm({ name: '', calories: '', protein: '', carbs: '', fat: '' })
     setShowQuickAdd(true)
@@ -852,6 +885,7 @@ export default function Dashboard({ session, isAdmin }) {
       setQuickSelected(food)
       setShowQuickNewForm(false)
       setQuickPicking(false)
+      invalidateFoods()
     }
   }
 
@@ -865,54 +899,60 @@ export default function Dashboard({ session, isAdmin }) {
       mealLog = data
     }
     const qg = parseFloat(quickQty) || 100
-    await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: quickSelected.id, quantity_g: qg })
+    const { error } = await supabase.from('meal_items').insert({ meal_log_id: mealLog.id, food_id: quickSelected.id, quantity_g: qg })
     setShowQuickAdd(false)
-    loadData()
+    if (error) { alert('Eroare: ' + error.message); return }
+    // Update today's totals locally instead of re-running every dashboard query
+    const r = qg / 100
+    setTodayNutrition(prev => ({
+      calories: prev.calories + (quickSelected.calories || 0) * r,
+      protein: prev.protein + (quickSelected.protein || 0) * r,
+      carbs: prev.carbs + (quickSelected.carbs || 0) * r,
+      fat: prev.fat + (quickSelected.fat || 0) * r,
+    }))
   }
 
   async function loadData() {
     const uid = session.user.id
-    // Run ALL independent queries in parallel
-    const [
-      { data: t },
-      { data: pr },
-      { data: meals },
-      { data: allSups },
-      { data: supLogs },
-      { data: wo },
-      { data: runs },
-    ] = await Promise.all([
-      supabase.from('user_targets').select('*').eq('user_id', uid).single(),
-      supabase.from('user_profiles').select('full_name').eq('user_id', uid).single(),
-      supabase.from('meal_logs').select('id, meal_items(quantity_g, foods(calories, protein, carbs, fat))').eq('user_id', uid).eq('date', today),
-      supabase.from('daily_supplements').select('*').eq('user_id', uid),
-      supabase.from('supplement_logs').select('supplement_id').eq('user_id', uid).eq('date', today).eq('taken', true),
-      supabase.from('workout_logs').select('id, type').eq('user_id', uid).eq('date', today),
-      supabase.from('running_logs').select('distance_km').eq('user_id', uid).eq('date', today),
-    ])
+    await swr(`${uid}:dash:${today}`, async () => {
+      // Toate cererile independente rulează în paralel
+      const res = await Promise.all([
+        supabase.from('user_targets').select('*').eq('user_id', uid).single(),
+        supabase.from('user_profiles').select('full_name').eq('user_id', uid).single(),
+        supabase.from('meal_logs').select('id, meal_items(quantity_g, foods(calories, protein, carbs, fat))').eq('user_id', uid).eq('date', today),
+        supabase.from('daily_supplements').select('*').eq('user_id', uid),
+        supabase.from('supplement_logs').select('supplement_id').eq('user_id', uid).eq('date', today).eq('taken', true),
+        supabase.from('workout_logs').select('id, type').eq('user_id', uid).eq('date', today),
+        supabase.from('running_logs').select('distance_km').eq('user_id', uid).eq('date', today),
+      ])
+      const [t, pr, meals, allSups, supLogs, wo, runs] = res.map(r => r.data)
+      // "niciun rând" la .single() nu e o eroare reală; restul erorilor nu se salvează în cache
+      const error = res.find(r => r.error && r.error.code !== 'PGRST116')?.error
+      return { t, pr, meals, allSups, supLogs, wo, runs, error }
+    }, ({ t, pr, meals, allSups, supLogs, wo, runs }) => {
+      if (t) setTargets(t)
+      if (pr?.full_name) setUserName(pr.full_name)
 
-    if (t) setTargets(t)
-    if (pr?.full_name) setUserName(pr.full_name)
+      let cal = 0, prot = 0, carb = 0, fat = 0
+      ;(meals || []).forEach(m => m.meal_items?.forEach(item => {
+        const f = item.foods; const r = item.quantity_g / 100
+        cal += (f?.calories || 0) * r; prot += (f?.protein || 0) * r
+        carb += (f?.carbs || 0) * r; fat += (f?.fat || 0) * r
+      }))
+      const takenIds = new Set((supLogs || []).map(l => l.supplement_id))
+      ;(allSups || []).filter(s => takenIds.has(s.id)).forEach(s => {
+        cal  += s.calories  || 0
+        prot += s.protein_g || 0
+        carb += s.carbs_g   || 0
+        fat  += s.fat_g     || 0
+      })
+      setTodayNutrition({ calories: cal, protein: prot, carbs: carb, fat })
 
-    let cal = 0, prot = 0, carb = 0, fat = 0
-    ;(meals || []).forEach(m => m.meal_items?.forEach(item => {
-      const f = item.foods; const r = item.quantity_g / 100
-      cal += (f?.calories || 0) * r; prot += (f?.protein || 0) * r
-      carb += (f?.carbs || 0) * r; fat += (f?.fat || 0) * r
-    }))
-    const takenIds = new Set((supLogs || []).map(l => l.supplement_id))
-    ;(allSups || []).filter(s => takenIds.has(s.id)).forEach(s => {
-      cal  += s.calories  || 0
-      prot += s.protein_g || 0
-      carb += s.carbs_g   || 0
-      fat  += s.fat_g     || 0
+      let burned = 0
+      ;(runs || []).forEach(r => { burned += (r.distance_km || 0) * 60 })
+      ;(wo || []).forEach(w => { if (w.type === 'strength') burned += 300; if (w.type === 'cycling') burned += 400 })
+      setCaloriesBurned(Math.round(burned))
     })
-    setTodayNutrition({ calories: cal, protein: prot, carbs: carb, fat })
-
-    let burned = 0
-    ;(runs || []).forEach(r => { burned += (r.distance_km || 0) * 60 })
-    ;(wo || []).forEach(w => { if (w.type === 'strength') burned += 300; if (w.type === 'cycling') burned += 400 })
-    setCaloriesBurned(Math.round(burned))
   }
 
   const consumed = Math.round(todayNutrition.calories)
@@ -935,6 +975,9 @@ export default function Dashboard({ session, isAdmin }) {
           <span className="text-[10px] text-slate-400">Raport</span>
         </button>
       </div>
+
+      {/* Fitness is the primary dashboard experience */}
+      <FitnessDashboardHero userId={session.user.id} />
 
       {/* Citat */}
       <QuoteCard isAdmin={isAdmin} />
@@ -1022,7 +1065,7 @@ export default function Dashboard({ session, isAdmin }) {
             )}
             <div className="flex gap-2">
               <button onClick={() => setShowQuickAdd(false)} className="btn-ghost flex-1 py-3">Anulează</button>
-              <button onClick={saveQuickAdd} disabled={!quickSelected} className="btn-primary flex-1 py-3 disabled:opacity-40">Adaugă</button>
+              <button onClick={() => quickAddGuard(saveQuickAdd)} disabled={!quickSelected || savingQuickAdd} className="btn-primary flex-1 py-3 disabled:opacity-40">{savingQuickAdd ? 'Se adaugă...' : 'Adaugă'}</button>
             </div>
           </div>
         ) : (
@@ -1062,6 +1105,7 @@ export default function Dashboard({ session, isAdmin }) {
                       setQuickFoods(prev => [...prev, saved].sort((a,b) => a.name.localeCompare(b.name)))
                       setQuickSelected(saved)
                       setQuickPicking(false); setShowQuickScanner(false); setQuickSearch('')
+                      invalidateFoods()
                     }
                   }}
                   onClose={() => setShowQuickScanner(false)}
@@ -1117,8 +1161,8 @@ export default function Dashboard({ session, isAdmin }) {
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => setShowQuickNewForm(false)} className="btn-ghost flex-1 py-2 text-sm">✕</button>
-                  <button onClick={saveQuickNewFood} disabled={!quickNewForm.name || !quickNewForm.calories}
-                    className="btn-primary flex-1 py-2 text-sm disabled:opacity-40">Salvează & selectează</button>
+                  <button onClick={() => newFoodGuard(saveQuickNewFood)} disabled={!quickNewForm.name || !quickNewForm.calories || savingNewFood}
+                    className="btn-primary flex-1 py-2 text-sm disabled:opacity-40">{savingNewFood ? 'Se salvează...' : 'Salvează & selectează'}</button>
                 </div>
               </div>
             )}

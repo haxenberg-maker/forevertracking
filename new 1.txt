@@ -1,0 +1,11 @@
+I. Mai mult control asupra elevilor:
+1. Ca administrator>
+1.1. In pagina de utilizatori la elevi cand deschidem tabelul de elev sa fie :
+1.1.1. si acolo prezent algoritumul de calorii si apa 
+1.1.2. un istoric cu zilele lor ca sa vedem cat la % din targete si-a facut ( Pe calorii, pe antrenamente, pe suplimente, pe tot ) 
+
+2. Ca orice tip de utilizator>
+2.1. Sa vedem gradul de antrenament si in Dashboard ( ala cu important/greu/tip) 
+2.2. La "Plan" la Tab Plan la introucere antrenament sa putem adauga si nonsportiv (Altele) 
+2.3. Sa apara si ora antrenamentului/taskului
+

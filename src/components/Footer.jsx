@@ -27,6 +27,9 @@ export default function Footer({ isAdmin }) {
     return () => window.removeEventListener('nav-prefs-changed', handler)
   }, [])
 
+  // pagina de întoarcere de la Strava nu are meniu
+  if (location.pathname === '/strava-callback') return null
+
   const visibleTabs = allTabs.filter(t => t.pref === null || prefs[t.pref] !== false)
   const tabs = isAdmin ? [...visibleTabs, adminTab] : visibleTabs
   const many = tabs.length >= 6

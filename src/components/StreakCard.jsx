@@ -7,6 +7,8 @@ import { supabase } from '../lib/supabase'
  * - zile cu apă logată
  * - zile cu antrenament
  */
+const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
 export default function StreakCard({ session }) {
   const [streaks, setStreaks] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -19,7 +21,7 @@ export default function StreakCard({ session }) {
     // Luăm ultimele 60 de zile pentru calcul
     const since = new Date(today)
     since.setDate(since.getDate() - 60)
-    const sinceStr = since.toISOString().split('T')[0]
+    const sinceStr = iso(since)
 
     const [{ data: meals }, { data: water }, { data: workouts }, { data: schedDone }] = await Promise.all([
       supabase.from('meal_logs').select('date').eq('user_id', uid).gte('date', sinceStr),
@@ -48,13 +50,13 @@ export default function StreakCard({ session }) {
     let streak = 0
     const today = new Date()
     // Verificăm dacă azi e deja logat (dacă nu, startăm de ieri)
-    const todayStr = today.toISOString().split('T')[0]
+    const todayStr = iso(today)
     let check = new Date(today)
     if (!datesSet.has(todayStr)) {
       check.setDate(check.getDate() - 1)
     }
     while (true) {
-      const s = check.toISOString().split('T')[0]
+      const s = iso(check)
       if (!datesSet.has(s)) break
       streak++
       check.setDate(check.getDate() - 1)

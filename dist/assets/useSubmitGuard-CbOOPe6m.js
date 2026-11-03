@@ -1,0 +1,1 @@
+import{r}from"./index-COkIvZtS.js";function c(){const[n,t]=r.useState(!1),e=r.useRef(!1),u=r.useCallback(async a=>{if(!e.current){e.current=!0,t(!0);try{await a()}finally{e.current=!1,t(!1)}}},[]);return[n,u]}export{c as u};

@@ -1,8 +1,12 @@
-import { useState, useEffect } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useState, useEffect, lazy, Suspense } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { swr } from '../lib/cache'
+import { useSubmitGuard } from '../lib/useSubmitGuard'
 import Modal from '../components/Modal'
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid } from 'recharts'
+
+// Grafice (recharts) — se încarcă doar când deschizi tab-ul Statistici
+const StatisticiTab = lazy(() => import('./sport/StatisticiTab'))
 
 function getToday() {
   const d = new Date()
@@ -19,8 +23,9 @@ function useStravaSync(session, onSuccess) {
   useEffect(() => { checkStrava() }, [])
 
   async function checkStrava() {
-    const { data } = await supabase.from('strava_tokens').select('athlete_id').eq('user_id', session.user.id).single()
-    setStravaConnected(!!data)
+    const uid = session.user.id
+    await swr(`${uid}:strava:connected`, () => supabase.from('strava_tokens').select('athlete_id').eq('user_id', uid).single(),
+      ({ data }) => setStravaConnected(!!data))
   }
 
   async function syncStrava(type) {
@@ -42,32 +47,34 @@ function useStravaSync(session, onSuccess) {
         await supabase.from('strava_tokens').update(data.newTokenData).eq('user_id', session.user.id)
       }
 
+      // Fetch existing notes ONCE and batch-insert, instead of one round trip per activity
       let imported = 0
       if (type === 'running' && data.running?.length) {
-        for (const run of data.running) {
-          // Check if already exists by notes containing strava_id
-          const { data: existing } = await supabase.from('running_logs')
-            .select('id').eq('user_id', session.user.id).like('notes', `%${run.strava_id}%`).single()
-          if (existing) continue
-          await supabase.from('running_logs').insert({
+        const { data: existingRuns } = await supabase.from('running_logs')
+          .select('notes').eq('user_id', session.user.id)
+        const existingNotes = (existingRuns || []).map(r => r.notes || '')
+        const newRuns = data.running.filter(run => !existingNotes.some(n => n.includes(`[strava:${run.strava_id}]`)))
+        if (newRuns.length) {
+          await supabase.from('running_logs').insert(newRuns.map(run => ({
             user_id: session.user.id, date: run.date,
             distance_km: run.distance_km, duration_min: run.duration_min,
             notes: `${run.notes} [strava:${run.strava_id}]`,
-          })
-          imported++
+          })))
         }
+        imported = newRuns.length
         setSyncMsg(`✅ ${imported} alergări noi importate din Strava!`)
       } else if (type === 'strength' && data.workouts?.length) {
-        for (const wo of data.workouts) {
-          const { data: existing } = await supabase.from('workout_logs')
-            .select('id').eq('user_id', session.user.id).like('notes', `%${wo.strava_id}%`).single()
-          if (existing) continue
-          await supabase.from('workout_logs').insert({
+        const { data: existingWorkouts } = await supabase.from('workout_logs')
+          .select('notes').eq('user_id', session.user.id)
+        const existingNotes = (existingWorkouts || []).map(w => w.notes || '')
+        const newWorkouts = data.workouts.filter(wo => !existingNotes.some(n => n.includes(`[strava:${wo.strava_id}]`)))
+        if (newWorkouts.length) {
+          await supabase.from('workout_logs').insert(newWorkouts.map(wo => ({
             user_id: session.user.id, date: wo.date, name: wo.name, type: 'strength',
             notes: `${wo.notes} [strava:${wo.strava_id}]`,
-          })
-          imported++
+          })))
         }
+        imported = newWorkouts.length
         setSyncMsg(`✅ ${imported} antrenamente noi importate din Strava!`)
       } else {
         setSyncMsg('✅ Nicio activitate nouă de importat.')
@@ -91,38 +98,41 @@ function AlergareTab({ session }) {
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({ date: today, distance_km: '', duration_min: '', notes: '', start_time: '' })
   const [loading, setLoading] = useState(true)
+  const [savingRun, runGuard] = useSubmitGuard()
   const { syncing, syncMsg, stravaConnected, syncStrava } = useStravaSync(session, loadRuns)
 
   useEffect(() => { loadRuns() }, [])
 
   async function loadRuns() {
-    setLoading(true)
-    const { data } = await supabase.from('running_logs').select('*')
-      .eq('user_id', session.user.id).order('date', { ascending: false }).limit(30)
-    setRuns(data || [])
-    setLoading(false)
+    const uid = session.user.id
+    await swr(`${uid}:runs:30`, () => supabase.from('running_logs').select('*')
+      .eq('user_id', uid).order('date', { ascending: false }).limit(30),
+      ({ data }) => { setRuns(data || []); setLoading(false) })
   }
 
   async function saveRun() {
     if (!form.distance_km || !form.duration_min) return
-    await supabase.from('running_logs').insert({
+    setShowModal(false)
+    const payload = {
       user_id: session.user.id,
       date: form.date,
       distance_km: parseFloat(form.distance_km),
       duration_min: parseFloat(form.duration_min),
       notes: form.notes,
       start_time: form.start_time || null,
-    })
-    setShowModal(false)
+    }
     setForm({ date: today, distance_km: '', duration_min: '', notes: '', start_time: '' })
-    loadRuns()
+    const { data, error } = await supabase.from('running_logs').insert(payload).select().single()
+    if (error) { alert('Eroare: ' + error.message); return }
+    setRuns(prev => [data, ...prev].sort((a, b) => b.date.localeCompare(a.date)))
   }
 
   async function deleteRun(id) {
-    if (confirm('Ștergi alergarea?')) {
-      await supabase.from('running_logs').delete().eq('id', id)
-      loadRuns()
-    }
+    if (!confirm('Ștergi alergarea?')) return
+    const prev = runs
+    setRuns(runs.filter(r => r.id !== id)) // optimistic
+    const { error } = await supabase.from('running_logs').delete().eq('id', id)
+    if (error) { setRuns(prev); alert('Eroare: ' + error.message) }
   }
 
   function formatPace(km, min) {
@@ -220,7 +230,7 @@ function AlergareTab({ session }) {
                 value={form[f.key]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
             </div>
           ))}
-          <button onClick={saveRun} className="btn-primary w-full py-3">Salvează alergarea</button>
+          <button onClick={() => runGuard(saveRun)} disabled={savingRun} className="btn-primary w-full py-3 disabled:opacity-50">{savingRun ? 'Se salvează...' : 'Salvează alergarea'}</button>
         </div>
       </Modal>
     </div>
@@ -237,37 +247,40 @@ function FortaTab({ session, isAdmin }) {
   const [exercises, setExercises] = useState([{ exercise_name: '', sets: '3', reps: '10', weight_kg: '0' }])
   const [loading, setLoading] = useState(true)
   const [students, setStudents] = useState([])
+  const [savingWorkout, workoutGuard] = useSubmitGuard()
   const { syncing, syncMsg, stravaConnected, syncStrava } = useStravaSync(session, loadWorkouts)
 
   useEffect(() => { loadWorkouts() }, [])
 
   async function loadWorkouts() {
-    setLoading(true)
-    const { data } = await supabase.from('workout_logs').select(`
+    const uid = session.user.id
+    const SELECT = `
       id, date, name, notes, type, user_id,
       workout_exercises(id, exercise_name, sets, reps, weight_kg)
-    `).eq('user_id', session.user.id).eq('type', 'strength')
-      .order('date', { ascending: false }).limit(20)
-
-    let all = data || []
-
-    if (isAdmin) {
-      const { data: studentWo } = await supabase.from('workout_logs').select(`
-        id, date, name, notes, type, user_id,
-        workout_exercises(id, exercise_name, sets, reps, weight_kg)
-      `).neq('user_id', session.user.id).eq('type', 'strength')
-        .like('notes', `%[admin:${session.user.id}]%`)
-        .order('date', { ascending: false }).limit(30)
-      if (studentWo?.length) {
-        const ids = [...new Set(studentWo.map(w => w.user_id))]
+    `
+    await swr(`${uid}:strength:${isAdmin ? 'admin' : 'user'}`, async () => {
+      const [own, stud] = await Promise.all([
+        supabase.from('workout_logs').select(SELECT).eq('user_id', uid).eq('type', 'strength')
+          .order('date', { ascending: false }).limit(20),
+        isAdmin
+          ? supabase.from('workout_logs').select(SELECT).neq('user_id', uid).eq('type', 'strength')
+              .like('notes', `%[admin:${uid}]%`).order('date', { ascending: false }).limit(30)
+          : Promise.resolve({ data: null }),
+      ])
+      let all = own.data || []
+      let students = null
+      if (stud.data?.length) {
+        const ids = [...new Set(stud.data.map(w => w.user_id))]
         const { data: profiles } = await supabase.from('user_profiles').select('user_id, full_name, email').in('user_id', ids)
-        setStudents(profiles || [])
-        all = [...all, ...studentWo].sort((a, b) => b.date.localeCompare(a.date))
+        students = profiles || []
+        all = [...all, ...stud.data].sort((a, b) => b.date.localeCompare(a.date))
       }
-    }
-
-    setWorkouts(all)
-    setLoading(false)
+      return { all, students, error: own.error || stud.error || undefined }
+    }, ({ all, students }) => {
+      if (students) setStudents(students)
+      setWorkouts(all)
+      setLoading(false)
+    })
   }
 
   function addExercise() {
@@ -284,13 +297,16 @@ function FortaTab({ session, isAdmin }) {
 
   async function saveWorkout() {
     if (!form.name) return
-    const { data: wl } = await supabase.from('workout_logs').insert({
+    setShowModal(false)
+    const { data: wl, error } = await supabase.from('workout_logs').insert({
       user_id: session.user.id, date: form.date, name: form.name, type: 'strength', notes: form.notes, start_time: form.start_time || null
     }).select().single()
+    if (error) { alert('Eroare: ' + error.message); return }
 
     const validExercises = exercises.filter(e => e.exercise_name.trim())
+    let savedExercises = []
     if (validExercises.length > 0) {
-      await supabase.from('workout_exercises').insert(
+      const { data: ex } = await supabase.from('workout_exercises').insert(
         validExercises.map(e => ({
           workout_log_id: wl.id,
           exercise_name: e.exercise_name,
@@ -298,13 +314,14 @@ function FortaTab({ session, isAdmin }) {
           reps: parseInt(e.reps),
           weight_kg: parseFloat(e.weight_kg) || 0,
         }))
-      )
+      ).select()
+      savedExercises = ex || []
     }
 
-    setShowModal(false)
+    // Insert locally instead of re-running the (potentially admin-joined) query
+    setWorkouts(prev => [{ ...wl, workout_exercises: savedExercises }, ...prev].sort((a, b) => b.date.localeCompare(a.date)))
     setForm({ date: today, name: '', notes: '' })
     setExercises([{ exercise_name: '', sets: '3', reps: '10', weight_kg: '0' }])
-    loadWorkouts()
   }
 
   async function deleteWorkout(id) {
@@ -313,10 +330,11 @@ function FortaTab({ session, isAdmin }) {
     if (wo?.user_id === session.user.id && wo?.notes?.includes('[admin:')) {
       alert('Acest antrenament a fost creat de antrenor și nu poate fi șters.'); return
     }
-    if (confirm('Ștergi antrenamentul?')) {
-      await supabase.from('workout_logs').delete().eq('id', id)
-      loadWorkouts()
-    }
+    if (!confirm('Ștergi antrenamentul?')) return
+    const prev = workouts
+    setWorkouts(workouts.filter(w => w.id !== id)) // optimistic
+    const { error } = await supabase.from('workout_logs').delete().eq('id', id)
+    if (error) { setWorkouts(prev); alert('Eroare: ' + error.message) }
   }
 
   return (
@@ -439,7 +457,7 @@ function FortaTab({ session, isAdmin }) {
             <input className="input" placeholder="Opțional..." value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
           </div>
 
-          <button onClick={saveWorkout} className="btn-primary w-full py-3">Salvează antrenamentul</button>
+          <button onClick={() => workoutGuard(saveWorkout)} disabled={savingWorkout} className="btn-primary w-full py-3 disabled:opacity-50">{savingWorkout ? 'Se salvează...' : 'Salvează antrenamentul'}</button>
         </div>
       </Modal>
     </div>
@@ -475,60 +493,62 @@ function CalendarTab({ session, isAdmin }) {
     const year = currentMonth.getFullYear()
     const month = currentMonth.getMonth()
     const start = `${year}-${String(month+1).padStart(2,'0')}-01`
-    const end = new Date(year, month+1, 0).toISOString().split('T')[0]
+    // NU folosi toISOString() aici: în România (UTC+2/3) ultima zi a lunii devine ziua dinainte
+    const end = `${year}-${String(month+1).padStart(2,'0')}-${String(new Date(year, month+1, 0).getDate()).padStart(2,'0')}`
     const uid = session.user.id
 
-    const [
-      { data: workouts }, { data: runs }, { data: mealLogs },
-      { data: supLogs }, { data: targets }, { data: allSups },
-      { data: allSchedules }, { data: exceptions },
-    ] = await Promise.all([
-      supabase.from('workout_logs').select('date, name, type').eq('user_id', uid).gte('date', start).lte('date', end),
-      supabase.from('running_logs').select('date, distance_km').eq('user_id', uid).gte('date', start).lte('date', end),
-      supabase.from('meal_logs').select('date, meal_items(quantity_g, foods(calories))').eq('user_id', uid).gte('date', start).lte('date', end),
-      supabase.from('supplement_logs').select('date, taken').eq('user_id', uid).gte('date', start).lte('date', end),
-      supabase.from('user_targets').select('calories').eq('user_id', uid).single(),
-      supabase.from('daily_supplements').select('id').eq('user_id', uid),
-      supabase.from('workout_schedules').select('*').eq('user_id', uid),
-      supabase.from('workout_schedule_exceptions').select('schedule_id, exception_date').eq('user_id', uid),
-    ])
+    await swr(`${uid}:month:${year}-${month}`, async () => {
+      const res = await Promise.all([
+        supabase.from('workout_logs').select('date, name, type').eq('user_id', uid).gte('date', start).lte('date', end),
+        supabase.from('running_logs').select('date, distance_km').eq('user_id', uid).gte('date', start).lte('date', end),
+        supabase.from('meal_logs').select('date, meal_items(quantity_g, foods(calories))').eq('user_id', uid).gte('date', start).lte('date', end),
+        supabase.from('supplement_logs').select('date, taken').eq('user_id', uid).gte('date', start).lte('date', end),
+        supabase.from('user_targets').select('calories').eq('user_id', uid).single(),
+        supabase.from('daily_supplements').select('id').eq('user_id', uid),
+        supabase.from('workout_schedules').select('*').eq('user_id', uid),
+        supabase.from('workout_schedule_exceptions').select('schedule_id, exception_date').eq('user_id', uid),
+      ])
+      const [workouts, runs, mealLogs, supLogs, targets, allSups, allSchedules, exceptions] = res.map(r => r.data)
+      const error = res.find(r => r.error && r.error.code !== 'PGRST116')?.error
+      return { workouts, runs, mealLogs, supLogs, targets, allSups, allSchedules, exceptions, error }
+    }, ({ workouts, runs, mealLogs, supLogs, targets, allSups, allSchedules, exceptions }) => {
+      const calTarget = targets?.calories || 2000
+      const supTotal = (allSups || []).length
+      const data = {}
+      const ensure = d => { if (!data[d]) data[d] = { runs: [], workouts: [], calories: 0, supTaken: 0, supTotal, calTarget } }
 
-    const calTarget = targets?.calories || 2000
-    const supTotal = (allSups || []).length
-    const data = {}
-    const ensure = d => { if (!data[d]) data[d] = { runs: [], workouts: [], calories: 0, supTaken: 0, supTotal, calTarget } }
-
-    ;(runs || []).forEach(r => { ensure(r.date); data[r.date].runs.push(r) })
-    ;(workouts || []).forEach(w => { ensure(w.date); data[w.date].workouts.push(w) })
-    ;(mealLogs || []).forEach(ml => {
-      ensure(ml.date)
-      ;(ml.meal_items || []).forEach(item => {
-        data[ml.date].calories += ((item.foods?.calories || 0) * (item.quantity_g || 0)) / 100
+      ;(runs || []).forEach(r => { ensure(r.date); data[r.date].runs.push(r) })
+      ;(workouts || []).forEach(w => { ensure(w.date); data[w.date].workouts.push(w) })
+      ;(mealLogs || []).forEach(ml => {
+        ensure(ml.date)
+        ;(ml.meal_items || []).forEach(item => {
+          data[ml.date].calories += ((item.foods?.calories || 0) * (item.quantity_g || 0)) / 100
+        })
       })
+      const supByDate = {}
+      ;(supLogs || []).forEach(sl => { if (!supByDate[sl.date]) supByDate[sl.date] = 0; if (sl.taken) supByDate[sl.date]++ })
+      Object.entries(supByDate).forEach(([date, count]) => { ensure(date); data[date].supTaken = count })
+
+      // Build scheduled map for future days in this month
+      const exSet = new Set((exceptions || []).map(e => `${e.schedule_id}_${e.exception_date}`))
+      const schedMap = {}
+      const daysInMonth = new Date(year, month + 1, 0).getDate()
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+        if (dateStr <= today) continue
+        const d = new Date(dateStr + 'T12:00:00')
+        const wd = d.getDay() === 0 ? 6 : d.getDay() - 1
+        const planned = (allSchedules || []).filter(s => {
+          if (exSet.has(`${s.id}_${dateStr}`)) return false
+          if (s.recurrence === 'once') return s.scheduled_date === dateStr
+          if (s.recurrence === 'weekly') return (s.weekdays || []).includes(wd)
+          return false
+        })
+        if (planned.length) schedMap[dateStr] = planned
+      }
+      setScheduledByDate(schedMap)
+      setMonthData(data)
     })
-    const supByDate = {}
-    ;(supLogs || []).forEach(sl => { if (!supByDate[sl.date]) supByDate[sl.date] = 0; if (sl.taken) supByDate[sl.date]++ })
-    Object.entries(supByDate).forEach(([date, count]) => { ensure(date); data[date].supTaken = count })
-
-    // Build scheduled map for future days in this month
-    const exSet = new Set((exceptions || []).map(e => `${e.schedule_id}_${e.exception_date}`))
-    const schedMap = {}
-    const daysInMonth = new Date(year, month + 1, 0).getDate()
-    for (let day = 1; day <= daysInMonth; day++) {
-      const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`
-      if (dateStr <= today) continue
-      const d = new Date(dateStr + 'T12:00:00')
-      const wd = d.getDay() === 0 ? 6 : d.getDay() - 1
-      const planned = (allSchedules || []).filter(s => {
-        if (exSet.has(`${s.id}_${dateStr}`)) return false
-        if (s.recurrence === 'once') return s.scheduled_date === dateStr
-        if (s.recurrence === 'weekly') return (s.weekdays || []).includes(wd)
-        return false
-      })
-      if (planned.length) schedMap[dateStr] = planned
-    }
-    setScheduledByDate(schedMap)
-    setMonthData(data)
   }
 
   async function loadDayDetail(dateStr) {
@@ -594,6 +614,8 @@ function CalendarTab({ session, isAdmin }) {
 
   async function saveAdd() {
     if (!addForm.name) return
+    // Close immediately — don't make the click wait on the network round trip
+    setShowAddModal(false)
     const targetUser = (isAdmin && addForm.student_id) ? addForm.student_id : session.user.id
     const insertData = {
       user_id: targetUser,
@@ -602,20 +624,20 @@ function CalendarTab({ session, isAdmin }) {
       type: addForm.type,
       notes: isAdmin && addForm.student_id ? `[admin:${session.user.id}]` : null,
     }
-    if (addForm.type === 'running' && addForm.distance_km) {
+    const { type, distance_km, name } = addForm
+    setAddForm({ name: '', type: 'strength', distance_km: '', student_id: '' })
+    if (type === 'running' && distance_km) {
       // For running with km, use running_logs
       await supabase.from('running_logs').insert({
         user_id: targetUser,
         date: addDate,
-        distance_km: parseFloat(addForm.distance_km),
+        distance_km: parseFloat(distance_km),
         duration_min: 0,
-        notes: addForm.name + (isAdmin && addForm.student_id ? ` [admin:${session.user.id}]` : ''),
+        notes: name + (isAdmin && addForm.student_id ? ` [admin:${session.user.id}]` : ''),
       })
     } else {
       await supabase.from('workout_logs').insert(insertData)
     }
-    setShowAddModal(false)
-    setAddForm({ name: '', type: 'strength', distance_km: '', student_id: '' })
     loadMonthData()
     if (selectedDate === addDate && selectedIsFuture) loadFuturePlan(addDate)
   }
@@ -895,114 +917,6 @@ function CalendarTab({ session, isAdmin }) {
 }
 
 
-// ─── Statistici ──────────────────────────────────────
-
-function StatisticiTab({ session }) {
-  const [runData, setRunData] = useState([])
-  const [workoutData, setWorkoutData] = useState([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => { loadStats() }, [])
-
-  async function loadStats() {
-    setLoading(true)
-    const { data: runs } = await supabase.from('running_logs').select('date, distance_km, duration_min')
-      .eq('user_id', session.user.id).order('date').limit(20)
-    const { data: workouts } = await supabase.from('workout_logs').select('date, type')
-      .eq('user_id', session.user.id).order('date').limit(60)
-
-    if (runs) {
-      setRunData(runs.map(r => ({
-        date: new Date(r.date).toLocaleDateString('ro-RO', { day: '2-digit', month: 'short' }),
-        km: r.distance_km,
-        pace: r.duration_min && r.distance_km ? +(r.duration_min / r.distance_km).toFixed(2) : 0
-      })))
-    }
-
-    if (workouts) {
-      const byMonth = {}
-      workouts.forEach(w => {
-        const m = new Date(w.date + 'T12:00:00').toLocaleDateString('ro-RO', { month: 'short', year: '2-digit' })
-        if (!byMonth[m]) byMonth[m] = { month: m, forta: 0, alergare: 0 }
-        if (w.type === 'strength') byMonth[m].forta++
-        else byMonth[m].alergare++
-      })
-      setWorkoutData(Object.values(byMonth).slice(-6))
-    }
-
-    setLoading(false)
-  }
-
-  if (loading) return <p className="text-center text-slate-500 text-sm py-8">Se încarcă statisticile...</p>
-
-  const tooltipStyle = { backgroundColor: '#1a1a24', border: '1px solid #2e2e42', borderRadius: 12, color: '#f1f5f9', fontSize: 12 }
-
-  return (
-    <div className="space-y-4">
-      {/* Running distance chart */}
-      {runData.length > 0 && (
-        <div className="card">
-          <p className="text-sm font-semibold text-white mb-3">🏃 Distanță alergare (km)</p>
-          <ResponsiveContainer width="100%" height={160}>
-            <LineChart data={runData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2e2e42" />
-              <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#64748b', fontSize: 10 }} />
-              <Tooltip contentStyle={tooltipStyle} />
-              <Line type="monotone" dataKey="km" stroke="#60a5fa" strokeWidth={2} dot={{ fill: '#60a5fa', r: 3 }} name="km" />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* Pace chart */}
-      {runData.length > 0 && (
-        <div className="card">
-          <p className="text-sm font-semibold text-white mb-3">⏱ Ritm (min/km)</p>
-          <ResponsiveContainer width="100%" height={140}>
-            <LineChart data={runData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2e2e42" />
-              <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#64748b', fontSize: 10 }} reversed />
-              <Tooltip contentStyle={tooltipStyle} />
-              <Line type="monotone" dataKey="pace" stroke="#4ade80" strokeWidth={2} dot={{ fill: '#4ade80', r: 3 }} name="min/km" />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {/* Workout frequency */}
-      {workoutData.length > 0 && (
-        <div className="card">
-          <p className="text-sm font-semibold text-white mb-3">📊 Antrenamente pe lună</p>
-          <ResponsiveContainer width="100%" height={160}>
-            <BarChart data={workoutData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2e2e42" />
-              <XAxis dataKey="month" tick={{ fill: '#64748b', fontSize: 10 }} />
-              <YAxis tick={{ fill: '#64748b', fontSize: 10 }} />
-              <Tooltip contentStyle={tooltipStyle} />
-              <Bar dataKey="forta" fill="#fb923c" radius={[4, 4, 0, 0]} name="Forță" />
-              <Bar dataKey="alergare" fill="#60a5fa" radius={[4, 4, 0, 0]} name="Alergare" />
-            </BarChart>
-          </ResponsiveContainer>
-          <div className="flex gap-4 mt-2 justify-center">
-            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-brand-orange" /><span className="text-xs text-slate-400">Forță</span></div>
-            <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-brand-blue" /><span className="text-xs text-slate-400">Alergare</span></div>
-          </div>
-        </div>
-      )}
-
-      {runData.length === 0 && workoutData.length === 0 && (
-        <div className="card text-center py-8">
-          <p className="text-4xl mb-2">📊</p>
-          <p className="text-slate-400 text-sm">Nu există date pentru statistici încă.</p>
-          <p className="text-slate-500 text-xs mt-1">Adaugă antrenamente pentru a vedea grafice.</p>
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ─── Main Page ────────────────────────────────────────
 
 // ─── Bicicletă ─────────────────────────────────────────
@@ -1013,7 +927,7 @@ function BicicletaTab({ session }) {
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({ date: today, distance_km: '', duration_min: '', type: 'road', notes: '' })
   const [loading, setLoading] = useState(false)
-
+  const [savingRide, rideGuard] = useSubmitGuard()
   const BIKE_TYPES = [
     { key: 'road', label: '🚴 Șosea' },
     { key: 'mtb', label: '🏔 MTB' },
@@ -1024,27 +938,32 @@ function BicicletaTab({ session }) {
   useEffect(() => { load() }, [])
 
   async function load() {
-    setLoading(true)
-    const { data } = await supabase.from('workout_logs').select('*')
-      .eq('user_id', session.user.id).eq('type', 'cycling').order('date', { ascending: false }).limit(30)
-    setRides(data || [])
-    setLoading(false)
+    const uid = session.user.id
+    await swr(`${uid}:rides:30`, () => supabase.from('workout_logs').select('*')
+      .eq('user_id', uid).eq('type', 'cycling').order('date', { ascending: false }).limit(30),
+      ({ data }) => { setRides(data || []); setLoading(false) })
   }
 
   async function save() {
     if (!form.distance_km) return
-    await supabase.from('workout_logs').insert({
+    setShowModal(false)
+    const payload = {
       user_id: session.user.id, date: form.date, type: 'cycling',
       name: `${BIKE_TYPES.find(t => t.key === form.type)?.label || '🚴'} ${form.distance_km} km`,
       notes: JSON.stringify({ distance_km: parseFloat(form.distance_km), duration_min: parseFloat(form.duration_min) || 0, bike_type: form.type, notes: form.notes }),
-    })
-    setShowModal(false)
+    }
     setForm({ date: today, distance_km: '', duration_min: '', type: 'road', notes: '' })
-    load()
+    const { data, error } = await supabase.from('workout_logs').insert(payload).select().single()
+    if (error) { alert('Eroare: ' + error.message); return }
+    setRides(prev => [data, ...prev].sort((a, b) => b.date.localeCompare(a.date)))
   }
 
   async function deleteRide(id) {
-    if (confirm('Ștergi ieșirea?')) { await supabase.from('workout_logs').delete().eq('id', id); load() }
+    if (!confirm('Ștergi ieșirea?')) return
+    const prev = rides
+    setRides(rides.filter(r => r.id !== id)) // optimistic
+    const { error } = await supabase.from('workout_logs').delete().eq('id', id)
+    if (error) { setRides(prev); alert('Eroare: ' + error.message) }
   }
 
   function parseMeta(r) {
@@ -1120,7 +1039,7 @@ function BicicletaTab({ session }) {
             <label className="text-xs text-slate-400 block mb-1">Notițe</label>
             <input className="input" placeholder="ex: Munte, vânt puternic..." value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} />
           </div>
-          <button onClick={save} disabled={!form.distance_km} className="btn-primary w-full py-3">Salvează</button>
+          <button onClick={() => rideGuard(save)} disabled={!form.distance_km || savingRide} className="btn-primary w-full py-3 disabled:opacity-50">{savingRide ? 'Se salvează...' : 'Salvează'}</button>
         </div>
       </Modal>
     </div>
@@ -1185,112 +1104,92 @@ function PlanTab({ session, isAdmin }) {
   const [activeSection, setActiveSection] = useState('mine') // 'mine' | 'students'
   const [studentFeedback, setStudentFeedback] = useState({})
   const [pastDoneLogs, setPastDoneLogs] = useState({}) // scheduleId -> Set of dates done
+  const [savingPlan, planGuard] = useSubmitGuard()
 
   useEffect(() => { load() }, [isAdmin])
 
   async function load() {
-    setLoading(true)
     const uid = session.user.id
+    const assignedBy = s => { try { return JSON.parse(s.notes || '{}').assigned_by } catch { return null } }
+    const dateOf = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+    const none = Promise.resolve({ data: null })
 
-    // 1. Load own schedules
-    const { data: sched } = await supabase.from('workout_schedules')
-      .select('*').eq('user_id', uid).order('created_at')
-
-    // 2. Load exceptions for own schedules
-    const { data: excepts } = await supabase.from('workout_schedule_exceptions')
-      .select('*').eq('user_id', uid)
-
-    // 3. If admin, load ALL student schedules
-    let studentSched = []
-    if (isAdmin) {
-      await loadStudents()
-      const { data: all, error: schedErr } = await supabase.from('workout_schedules')
-        .select('*')
-        .neq('user_id', uid)
-        .order('created_at')
-      if (schedErr) console.error('studentSched error:', schedErr)
+    await swr(`${uid}:plan:${isAdmin ? 'admin' : 'user'}`, async () => {
+      // Runda 1: tot ce nu depinde de altceva, în paralel
+      const [schedRes, excRes, studentsRes, allRes] = await Promise.all([
+        supabase.from('workout_schedules').select('*').eq('user_id', uid).order('created_at'),
+        supabase.from('workout_schedule_exceptions').select('*').eq('user_id', uid),
+        isAdmin ? supabase.from('user_profiles').select('user_id, full_name, email').eq('account_type', 'elev') : none,
+        isAdmin ? supabase.from('workout_schedules').select('*').neq('user_id', uid).order('created_at') : none,
+      ])
+      if (allRes.error) console.error('studentSched error:', allRes.error)
+      const sched = schedRes.data
       // Filter client-side to those assigned by this admin
-      studentSched = (all || []).filter(s => {
-        try { return JSON.parse(s.notes || '{}').assigned_by === uid } catch { return false }
-      })
-      console.log('all other schedules:', all?.length, 'filtered for admin:', studentSched.length)
-    }
+      const studentSched = (allRes.data || []).filter(s => assignedBy(s) === uid)
 
-    // 4. Load student profiles for names
-    if (studentSched.length) {
-      const ids = [...new Set(studentSched.map(s => s.user_id))]
-      const { data: profiles } = await supabase.from('user_profiles')
-        .select('user_id, full_name, email').in('user_id', ids)
-      const pmap = {}
-      ;(profiles || []).forEach(p => { pmap[p.user_id] = p })
-      setStudentProfiles(pmap)
-    }
-
-    // 5. Load admin profiles for "assigned by" display (for elev view)
-    const adminIds = [...new Set((sched || []).map(s => {
-      try { return JSON.parse(s.notes || '{}').assigned_by } catch { return null }
-    }).filter(Boolean))]
-    if (adminIds.length) {
-      const { data: aprof } = await supabase.from('user_profiles')
-        .select('user_id, full_name, email').in('user_id', adminIds)
-      console.log('adminIds:', adminIds, 'aprof:', aprof)
-      const amap = {}
-      ;(aprof || []).forEach(p => { amap[p.user_id] = p })
-      setAdminProfiles(amap)
-    } else {
-      console.log('no adminIds found in sched:', (sched||[]).map(s => s.notes))
-      setAdminProfiles({})
-    }
-
-    const excMap = {}
-    ;(excepts || []).forEach(e => {
-      if (!excMap[e.schedule_id]) excMap[e.schedule_id] = []
-      excMap[e.schedule_id].push(e)
-    })
-
-    setMySchedules(sched || [])
-    setStudentSchedules(studentSched)
-    setExceptions(excMap)
-
-    // Load last 30 days of done logs for own schedules
-    if (sched?.length) {
+      // Runda 2: profiluri + loguri, în paralel
+      const studentIds = [...new Set(studentSched.map(s => s.user_id))]
+      const adminIds = [...new Set((sched || []).map(assignedBy).filter(Boolean))]
       const past30 = new Date(); past30.setDate(past30.getDate() - 30)
-      const d30 = `${past30.getFullYear()}-${String(past30.getMonth()+1).padStart(2,'0')}-${String(past30.getDate()).padStart(2,'0')}`
-      const schedIds = sched.map(s => s.id)
-      const { data: doneLogs } = await supabase.from('workout_schedule_logs')
-        .select('schedule_id, date, done').in('schedule_id', schedIds).eq('done', true).gte('date', d30)
+      const [spRes, apRes, doneRes, fbRes] = await Promise.all([
+        studentIds.length ? supabase.from('user_profiles').select('user_id, full_name, email').in('user_id', studentIds) : none,
+        adminIds.length ? supabase.from('user_profiles').select('user_id, full_name, email').in('user_id', adminIds) : none,
+        sched?.length
+          ? supabase.from('workout_schedule_logs').select('schedule_id, date, done')
+              .in('schedule_id', sched.map(s => s.id)).eq('done', true).gte('date', dateOf(past30))
+          : none,
+        studentSched.length
+          ? supabase.from('workout_schedule_logs').select('*')
+              .in('schedule_id', studentSched.map(s => s.id)).eq('done', true).not('feedback', 'is', null)
+          : none,
+      ])
+      return {
+        sched, studentSched, excepts: excRes.data, students: studentsRes.data,
+        studentProfiles: spRes.data, adminProfiles: apRes.data, doneLogs: doneRes.data, fbLogs: fbRes.data,
+        error: schedRes.error || excRes.error || undefined,
+      }
+    }, (r) => {
+      const pmap = {}
+      ;(r.studentProfiles || []).forEach(p => { pmap[p.user_id] = p })
+      const amap = {}
+      ;(r.adminProfiles || []).forEach(p => { amap[p.user_id] = p })
+
+      const excMap = {}
+      ;(r.excepts || []).forEach(e => {
+        if (!excMap[e.schedule_id]) excMap[e.schedule_id] = []
+        excMap[e.schedule_id].push(e)
+      })
+
       const doneMap = {}
-      ;(doneLogs || []).forEach(l => {
+      ;(r.doneLogs || []).forEach(l => {
         if (!doneMap[l.schedule_id]) doneMap[l.schedule_id] = new Set()
         doneMap[l.schedule_id].add(l.date)
       })
-      setPastDoneLogs(doneMap)
-    }
 
-    // Load feedback for student schedules (admin view)
-    if (studentSched.length) {
-      const ids = studentSched.map(s => s.id)
-      const { data: fbLogs } = await supabase.from('workout_schedule_logs')
-        .select('*').in('schedule_id', ids).eq('done', true).not('feedback', 'is', null)
-      if (fbLogs?.length) {
-        const fbMap = {}
-        fbLogs.forEach(l => {
-          if (!fbMap[l.schedule_id]) fbMap[l.schedule_id] = []
-          let fb = null
-          try { fb = JSON.parse(l.feedback) } catch {}
-          if (fb) {
-            const sp = studentProfiles[l.user_id]
-            fbMap[l.schedule_id].push({
-              date: l.date, feeling: fb.feeling, notes: fb.notes,
-              studentName: sp?.full_name || sp?.email || 'Elev'
-            })
-          }
+      // Feedback elevi (numele vine din profilurile tocmai aduse, nu din state-ul vechi)
+      const fbMap = {}
+      ;(r.fbLogs || []).forEach(l => {
+        let fb = null
+        try { fb = JSON.parse(l.feedback) } catch {}
+        if (!fb) return
+        const sp = pmap[l.user_id]
+        if (!fbMap[l.schedule_id]) fbMap[l.schedule_id] = []
+        fbMap[l.schedule_id].push({
+          date: l.date, feeling: fb.feeling, notes: fb.notes,
+          studentName: sp?.full_name || sp?.email || 'Elev'
         })
-        setStudentFeedback(fbMap)
-      }
-    }
+      })
 
-    setLoading(false)
+      if (r.students) setStudents(r.students)
+      setStudentProfiles(pmap)
+      setAdminProfiles(amap)
+      setMySchedules(r.sched || [])
+      setStudentSchedules(r.studentSched)
+      setExceptions(excMap)
+      setPastDoneLogs(doneMap)
+      setStudentFeedback(fbMap)
+      setLoading(false)
+    })
   }
 
   // Keep old `schedules` as alias for non-admin render
@@ -1819,10 +1718,10 @@ function PlanTab({ session, isAdmin }) {
             </div>
           )}
 
-          <button onClick={save}
-            disabled={!form.name || (form.recurrence === 'weekly' && !form.weekdays.length)}
+          <button onClick={() => planGuard(save)}
+            disabled={!form.name || (form.recurrence === 'weekly' && !form.weekdays.length) || savingPlan}
             className="btn-primary w-full py-3 disabled:opacity-50">
-            {editItem ? 'Salvează modificările' : (form.student_ids?.length > 1 ? `Creează pentru ${form.student_ids.length} elevi` : 'Creează antrenament')}
+            {savingPlan ? 'Se salvează...' : (editItem ? 'Salvează modificările' : (form.student_ids?.length > 1 ? `Creează pentru ${form.student_ids.length} elevi` : 'Creează antrenament'))}
           </button>
         </div>
       </Modal>
@@ -1858,7 +1757,8 @@ function PlanTab({ session, isAdmin }) {
 
 
 export default function Sport({ session, isAdmin }) {
-  const location = useLocation ? useLocation() : { search: '' }
+  const location = useLocation()
+  const navigate = useNavigate()
   const initialTab = new URLSearchParams(location?.search || '').get('tab') || 'plan'
   const [tab, setTab] = useState(initialTab)
   const tabs = [
@@ -1872,7 +1772,12 @@ export default function Sport({ session, isAdmin }) {
 
   return (
     <div className="page fade-in">
-      <h1 className="text-2xl font-bold text-white mb-4">📋 Plan</h1>
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <h1 className="text-2xl font-bold text-white">📋 Plan</h1>
+        <button onClick={() => navigate('/fitness-rpg')} className="btn-primary inline-flex items-center gap-2 !px-3 !py-2.5 whitespace-nowrap">
+          <span>⚡</span><span>Fitness RPG</span>
+        </button>
+      </div>
       <div className="flex gap-1 bg-dark-800 border border-dark-600 rounded-xl p-1 mb-4 overflow-x-auto">
         {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
@@ -1886,7 +1791,11 @@ export default function Sport({ session, isAdmin }) {
       {tab === 'alergare' && <AlergareTab session={session} />}
       {tab === 'forta' && <FortaTab session={session} isAdmin={isAdmin} />}
       {tab === 'bicicleta' && <BicicletaTab session={session} />}
-      {tab === 'statistici' && <StatisticiTab session={session} />}
+      {tab === 'statistici' && (
+        <Suspense fallback={<p className="text-center text-slate-500 text-sm py-8">Se încarcă...</p>}>
+          <StatisticiTab session={session} />
+        </Suspense>
+      )}
     </div>
   )
 }
